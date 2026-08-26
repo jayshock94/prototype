@@ -13,14 +13,20 @@
  * re-serving it from our own domain is what keeps the two on one origin.
  *
  * So: never link an iframe at the Blob URL. Always point it here.
+ *
+ * Access is checked below: the admin, or a reviewer holding a valid pass for
+ * the prototype this version belongs to. Without that the response is a 404.
  */
 
 import { eq } from "drizzle-orm";
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { getDb } from "@/db";
 import { version } from "@/db/schema";
+import { ADMIN_COOKIE, verifySessionToken } from "@/lib/auth";
 import { getPrototypeHtmlStream } from "@/lib/prototype-storage";
+import { hasValidPass, passCookieName } from "@/lib/reviewer-auth";
 
 export async function GET(
   _request: Request,
@@ -36,12 +42,31 @@ export async function GET(
 
   const db = getDb();
   const [row] = await db
-    .select({ htmlBlobUrl: version.htmlBlobUrl })
+    .select({
+      htmlBlobUrl: version.htmlBlobUrl,
+      prototypeId: version.prototypeId,
+    })
     .from(version)
     .where(eq(version.id, versionId))
     .limit(1);
 
   if (!row) {
+    return new NextResponse("Not found", { status: 404 });
+  }
+
+  // Who is allowed to see the file: the admin, or a reviewer who has entered
+  // this prototype's password. Version ids are UUIDs and are not published
+  // anywhere, but that is obscurity, not access control.
+  const store = await cookies();
+  const isAdmin = await verifySessionToken(store.get(ADMIN_COOKIE)?.value);
+  const isReviewer = await hasValidPass(
+    store.get(passCookieName(row.prototypeId))?.value,
+    row.prototypeId,
+  );
+
+  if (!isAdmin && !isReviewer) {
+    // 404 rather than 403: someone without access learns nothing about
+    // whether this version exists.
     return new NextResponse("Not found", { status: 404 });
   }
 
@@ -66,8 +91,3 @@ export async function GET(
     },
   });
 }
-
-// TODO chunk 3: gate this on the reviewer's per-prototype session cookie.
-// Right now anyone who knows a version id can fetch the HTML. Version ids are
-// UUIDs and are not published anywhere, but that is obscurity, not access
-// control -- the reviewer password check belongs here once it exists.

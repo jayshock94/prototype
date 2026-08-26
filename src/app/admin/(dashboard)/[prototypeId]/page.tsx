@@ -3,6 +3,7 @@ import { desc, eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 
 import { ButtonLink } from "@/components/m3/button";
+import { CopyLink } from "@/components/m3/copy-link";
 import { Card } from "@/components/m3/card";
 import { OpenInNewIcon } from "@/components/m3/icons";
 import { getDb } from "@/db";
@@ -97,12 +98,11 @@ export default async function PrototypeDetailPage({
       <Card variant="outlined" className="p-6">
         <dl className="grid gap-6 sm:grid-cols-2">
           <Detail label="Reviewer link">
-            {/* TODO chunk 3: this link starts working once /r/ is built. */}
-            <code className="text-body-medium break-all text-on-surface-variant">
-              /r/{row.id}
-            </code>
-            <p className="mt-1 text-body-small text-on-surface-variant">
-              Not built yet — arrives with the reviewer flow.
+            {/* Permanent: it always resolves to whichever version is current,
+                so reviewers keep the same link across versions. */}
+            <CopyLink path={`/r/${row.id}`} />
+            <p className="mt-2 text-body-small text-on-surface-variant">
+              Send this with the password. It always opens the current version.
             </p>
           </Detail>
 

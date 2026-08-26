@@ -93,14 +93,35 @@ tokens plus a handful of hand-written components.
 Hand-written components live in `src/components/m3/`. Add to them rather than
 writing one-off styled elements, so later chunks stay consistent.
 
+## Reviewer access
+- `/r/[prototypeId]` is the only public route, and the link is permanent: it
+  always resolves to whichever version has `is_current` set.
+- Two cookies, both scoped per prototype and both signed. The *pass* says this
+  browser got the password right; the *session* says which visit this is. A
+  pass for one prototype cannot be moved to another, because the prototype id
+  is inside the signature.
+- The pass cookie deliberately has no `maxAge`, so the browser discards it on
+  close and the next visit starts at the password screen.
+- The name is never stored anywhere but the session row. Arriving at
+  `/r/[prototypeId]` always shows the name step and always starts a new
+  session, even when the pass is still valid -- CLAUDE.md requires the name to
+  be asked every time. `/r/[prototypeId]/review` is where the reviewer lands
+  afterwards, so refreshing the prototype does not re-prompt.
+- `/p/[versionId]` is served only to an admin or to a reviewer holding a valid
+  pass for that version's prototype. Everyone else gets a 404 rather than a
+  403, so nothing is revealed about which versions exist.
+
 ## Where things are
 - `src/db/schema.ts`          Drizzle schema, all tables from the data model above
 - `src/db/index.ts`           Database client (`getDb()`)
 - `src/lib/auth.ts`           Admin cookie session (HMAC signed, httpOnly)
+- `src/lib/reviewer-auth.ts`  Reviewer pass and session cookies, per prototype
+- `src/lib/signing.ts`        HMAC signing shared by both
 - `src/lib/password.ts`       Reviewer password hashing (PBKDF2 via Web Crypto)
 - `src/lib/prototype-storage.ts`  Everything to do with Vercel Blob
 - `src/lib/env.ts`            Reads and validates environment variables
 - `src/app/p/[versionId]/`    Serves prototype HTML on our own origin
+- `src/app/r/[prototypeId]/`  Reviewer entry, and the review page
 - `middleware.ts`             Protects every /admin route except /admin/login
 - `drizzle/`                  Generated SQL migrations, committed to the repo
 
@@ -128,5 +149,14 @@ writing one-off styled elements, so later chunks stay consistent.
   file input has no `name`.
 
 ## Build progress
-Built so far: chunks 1 (foundation) and 2 (upload and same-origin serving).
-Next up: chunk 3 (reviewer entry and prototype render).
+Built so far: chunks 1 (foundation), 2 (upload and same-origin serving) and
+3 (reviewer entry and prototype render).
+Next up: chunk 4 (the assistant).
+
+## Note on real prototypes
+The first real prototype put through this marks its screens with
+`data-screen-label`, not the `data-screen` attribute assumed above, and renders
+as a bundled app rather than plain show/hide divs. Screen detection in chunk 6
+should accept both attributes, and should wait for the framed document to
+finish rendering rather than reading it on load -- the content appears a
+second or so after the iframe fires `load`.

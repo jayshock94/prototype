@@ -9,7 +9,7 @@ bottom and you will have it running.
 
 ## What exists right now
 
-This is **chunk 2 of 10**. Working today:
+This is **chunk 3 of 10**. Working today:
 
 - Next.js app with the Material 3 design system
 - The full database schema, all ten tables
@@ -19,9 +19,11 @@ This is **chunk 2 of 10**. Working today:
   browser sends them straight to storage, with a progress bar
 - Prototypes served from this app's own domain at `/p/<versionId>`
 - An admin dashboard listing prototypes, and a detail page per prototype
+- A reviewer link you can send out: password, name picker, then the prototype
+  with space reserved for the assistant
 
-Not built yet: the reviewer side, the assistant, annotation, tasks and
-acceptance criteria, and versions. Those are chunks 3 through 10 in
+Not built yet: the assistant itself, annotation, tasks and acceptance
+criteria, and versions. Those are chunks 4 through 10 in
 `claudecodebuildprompts.md`.
 
 ---
@@ -101,8 +103,11 @@ Click **New prototype**, fill it in, and upload a self-contained HTML file. You
 land on the prototype's detail page with an **Open v1** button, which opens the
 prototype at a URL on your own domain.
 
-**That is chunk 2 done.** The reviewer link shown on the detail page does not
-work yet — that is chunk 3.
+**That is chunk 2 done.**
+
+Now open the prototype's detail page and copy the **reviewer link**. Open it in
+a private window, enter the reviewer password you set, pick a name, and you
+should see the prototype with the assistant panel beside it. That is chunk 3.
 
 ---
 
@@ -187,6 +192,7 @@ src/
       login/              Sign-in page — deliberately outside (dashboard)
       auth-actions.ts     Sign in and sign out
     p/[versionId]/        Serves prototype HTML on our own origin
+    r/[prototypeId]/      Reviewer entry: password, name, then the review page
     api/prototype-upload/ Issues the token the browser uses to upload
     globals.css           Material 3 tokens. The design system lives here.
     layout.tsx            Root layout, loads Roboto
@@ -196,6 +202,8 @@ src/
     index.ts              Database connection
   lib/
     auth.ts               Admin cookie session, signed so it cannot be forged
+    reviewer-auth.ts      Reviewer cookies, scoped to one prototype
+    signing.ts            The HMAC signing both of those use
     password.ts           Reviewer password hashing
     prototype-storage.ts  Everything to do with Vercel Blob
     env.ts                Environment variables, read in one place
