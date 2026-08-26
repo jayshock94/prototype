@@ -3,21 +3,29 @@
  *
  * Everything about Claude happens here, on the server. The API key is read
  * from the environment in this file and nowhere else, so it never reaches the
- * browser -- the browser only ever POSTs a message and reads back text.
+ * browser -- the browser only ever POSTs a message and reads back a stream.
  *
- * The response is streamed. A reviewer watching a blank panel for eight
- * seconds assumes it is broken; watching words appear, they wait.
+ * Since chunk 5 the assistant can also record feedback, using the
+ * record_feedback tool. That is why the response is a stream of JSON events
+ * rather than plain text: a turn can produce prose and rows in the feedback
+ * table, and the panel has to show both as they happen.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { getDb } from "@/db";
-import { message, notBuilt, prototype, session, version } from "@/db/schema";
+import { feedback, message, notBuilt, prototype, session, version } from "@/db/schema";
 import { buildSystemPrompt } from "@/lib/assistant-context";
 import { anthropicApiKey, hasAnthropicApiKey } from "@/lib/env";
+import {
+  cleanField,
+  isSeverity,
+  type FeedbackItem,
+} from "@/lib/feedback";
+import { RECORD_FEEDBACK, recordFeedbackTool } from "@/lib/feedback-tool";
 import {
   hasValidPass,
   passCookieName,
@@ -49,6 +57,16 @@ const MAX_REPLY_TOKENS = 4096;
 
 /** Guards against a pathological paste rather than trimming normal messages. */
 const MAX_MESSAGE_CHARS = 4000;
+
+/**
+ * How many times one message may go round the record-then-continue loop.
+ *
+ * A reviewer raising four problems in one message is normal and takes one
+ * round, because Claude can call the tool four times in a single turn. More
+ * than a handful of rounds means something has gone wrong, and this stops it
+ * costing money while it does.
+ */
+const MAX_TOOL_ROUNDS = 4;
 
 export async function POST(request: Request) {
   if (!hasAnthropicApiKey()) {
@@ -130,12 +148,34 @@ export async function POST(request: Request) {
     .from(notBuilt)
     .where(eq(notBuilt.versionId, context.versionId));
 
+  // Everything already recorded this visit. This goes into the system prompt
+  // so Claude does not log the same complaint twice when a reviewer circles
+  // back to it, and so it can answer "what have I flagged so far?".
+  const alreadyRecorded = await db
+    .select({
+      severity: feedback.severity,
+      screenId: feedback.screenId,
+      happened: feedback.happened,
+      expected: feedback.expected,
+      note: feedback.note,
+    })
+    .from(feedback)
+    .where(eq(feedback.sessionId, sessionId))
+    .orderBy(feedback.createdAt);
+
   const systemPrompt = await buildSystemPrompt({
     name: context.name,
     description: context.description,
     versionLabel: context.versionLabel,
     knowledgeBaseText: context.knowledgeBaseText,
     notBuilt: notBuiltRows.map((r) => r.text),
+    recorded: alreadyRecorded.map((r) => ({
+      severity: r.severity,
+      screenId: r.screenId,
+      happened: r.happened,
+      expected: r.expected,
+      note: r.note,
+    })),
   });
 
   // --- Conversation so far -------------------------------------------------
@@ -161,38 +201,162 @@ export async function POST(request: Request) {
 
   const encoder = new TextEncoder();
 
+  /**
+   * Write one feedback row and hand back what the browser needs to draw it.
+   *
+   * Everything here is untrusted: the fields come from a model, so they get the
+   * same trimming and validation as anything typed into a form. An unusable
+   * call returns null and is reported back to Claude as an error rather than
+   * being written as an empty row.
+   */
+  async function record(input: unknown): Promise<FeedbackItem | null> {
+    const raw = (input ?? {}) as Record<string, unknown>;
+
+    const happened = cleanField(raw.happened);
+    const expected = cleanField(raw.expected);
+    const note = cleanField(raw.note);
+
+    // A row with nothing in any of the three text fields says nothing to
+    // anybody, so refuse it rather than filling the reviewer's list with
+    // blanks.
+    if (!happened && !expected && !note) return null;
+
+    const [row] = await db
+      .insert(feedback)
+      .values({
+        sessionId: sessionId!,
+        screenId: cleanField(raw.screen_id),
+        happened,
+        expected,
+        note,
+        // The column has its own default, but being explicit means an
+        // unrecognised value from the model lands somewhere sensible instead
+        // of failing the insert against the Postgres enum.
+        severity: isSeverity(raw.severity) ? raw.severity : "minor",
+      })
+      .returning({
+        id: feedback.id,
+        screenId: feedback.screenId,
+        expected: feedback.expected,
+        happened: feedback.happened,
+        note: feedback.note,
+        severity: feedback.severity,
+      });
+
+    return row ?? null;
+  }
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      // Everything the assistant said this turn, prose only, for the
+      // transcript. Tool calls are recorded as feedback rows instead.
       let reply = "";
-      try {
-        const claude = client.messages.stream({
-          model: "claude-opus-5",
-          max_tokens: MAX_REPLY_TOKENS,
-          // The global instructions are byte-identical across every prototype
-          // and every reviewer, so caching them is worth the breakpoint.
-          system: [
-            { type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } },
-          ],
-          // Adaptive thinking lets Claude decide how much to reason. Medium
-          // effort suits reviewer questions, which are mostly straightforward
-          // lookups against the knowledge base.
-          // TUNE HERE: raise to "high" if answers feel shallow.
-          thinking: { type: "adaptive" },
-          output_config: { effort: "medium" },
-          messages: [...history, { role: "user", content: text }],
-        });
+      let closed = false;
 
-        for await (const event of claude) {
-          if (
-            event.type === "content_block_delta" &&
-            event.delta.type === "text_delta"
-          ) {
-            reply += event.delta.text;
-            controller.enqueue(encoder.encode(event.delta.text));
-          }
+      /**
+       * One newline-delimited JSON object per event.
+       *
+       * Plain text was enough in chunk 4, when the only thing coming back was
+       * prose. Now a turn can also produce feedback rows, and the panel needs
+       * to tell them apart. Text chunks are JSON-encoded, so a newline inside
+       * one cannot be mistaken for the end of an event.
+       */
+      function emit(event: { t: "text"; v: string } | { t: "feedback"; v: FeedbackItem }) {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        } catch {
+          // The reviewer navigated away mid-answer; there is nobody to tell.
+          closed = true;
         }
+      }
 
-        await claude.finalMessage();
+      try {
+        // The running turn-by-turn conversation for *this* request. It grows
+        // as tool calls happen, and is thrown away afterwards -- the durable
+        // record is the message table and the feedback rows.
+        const conversation: Anthropic.MessageParam[] = [
+          ...history,
+          { role: "user", content: text },
+        ];
+
+        for (let round = 0; ; round += 1) {
+          const claude = client.messages.stream({
+            model: "claude-opus-5",
+            max_tokens: MAX_REPLY_TOKENS,
+            // The global instructions are byte-identical across every prototype
+            // and every reviewer, so caching them is worth the breakpoint.
+            system: [
+              { type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } },
+            ],
+            // Adaptive thinking lets Claude decide how much to reason. Medium
+            // effort suits reviewer questions, which are mostly straightforward
+            // lookups against the knowledge base.
+            // TUNE HERE: raise to "high" if answers feel shallow.
+            thinking: { type: "adaptive" },
+            output_config: { effort: "medium" },
+            tools: [recordFeedbackTool],
+            messages: conversation,
+          });
+
+          for await (const event of claude) {
+            if (
+              event.type === "content_block_delta" &&
+              event.delta.type === "text_delta"
+            ) {
+              reply += event.delta.text;
+              emit({ t: "text", v: event.delta.text });
+            }
+          }
+
+          const final = await claude.finalMessage();
+          if (final.stop_reason !== "tool_use") break;
+
+          // The assistant's turn goes back verbatim, thinking blocks included.
+          // Stripping them would break the tool-use exchange.
+          conversation.push({ role: "assistant", content: final.content });
+
+          const results: Anthropic.ToolResultBlockParam[] = [];
+
+          for (const block of final.content) {
+            if (block.type !== "tool_use") continue;
+
+            if (block.name !== RECORD_FEEDBACK) {
+              results.push({
+                type: "tool_result",
+                tool_use_id: block.id,
+                is_error: true,
+                content: "No such tool.",
+              });
+              continue;
+            }
+
+            const item = await record(block.input).catch(() => null);
+
+            if (!item) {
+              results.push({
+                type: "tool_result",
+                tool_use_id: block.id,
+                is_error: true,
+                content:
+                  "Nothing was recorded: say at least what happened, what was expected, or add a note.",
+              });
+              continue;
+            }
+
+            emit({ t: "feedback", v: item });
+            results.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              content:
+                "Recorded. The reviewer can see it and can change or delete it, so do not read it back to them in full -- one short line confirming what you logged is enough.",
+            });
+          }
+
+          conversation.push({ role: "user", content: results });
+
+          if (round + 1 >= MAX_TOOL_ROUNDS) break;
+        }
       } catch (error) {
         // A reviewer who navigates away or refreshes mid-answer aborts the
         // request, which surfaces here as a stream error. That is not a
@@ -212,11 +376,7 @@ export async function POST(request: Request) {
               ? `\n\n[The assistant could not answer just now: ${error.message}]`
               : "\n\n[The assistant could not answer just now. Please try again.]";
           reply += note;
-          try {
-            controller.enqueue(encoder.encode(note));
-          } catch {
-            // The reviewer is already gone; nothing to tell them.
-          }
+          emit({ t: "text", v: note });
         }
       } finally {
         // Persist whatever was produced, including a partial answer -- the
@@ -227,6 +387,7 @@ export async function POST(request: Request) {
             .values({ sessionId, role: "assistant", content: reply })
             .catch(() => {});
         }
+        closed = true;
         try {
           controller.close();
         } catch {
@@ -238,7 +399,10 @@ export async function POST(request: Request) {
 
   return new NextResponse(stream, {
     headers: {
-      "Content-Type": "text/plain; charset=utf-8",
+      // Newline-delimited JSON. Not application/json: this is a stream of
+      // objects, not one document, and calling it JSON invites something in
+      // the chain to try to buffer and parse the whole thing.
+      "Content-Type": "application/x-ndjson; charset=utf-8",
       "Cache-Control": "no-store",
       // Stops proxies buffering the stream into one lump at the end.
       "X-Accel-Buffering": "no",

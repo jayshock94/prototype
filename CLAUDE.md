@@ -116,7 +116,8 @@ writing one-off styled elements, so later chunks stay consistent.
   `src/lib/env.ts` and used only there -- it must never reach the browser.
 - The system prompt is `prompts/assistant.md` (global, hand-edited) plus
   per-prototype context appended at request time: name, description, knowledge
-  base, and the not-built list. That file is bundled into the deployed function
+  base, the not-built list, and whatever this session has already logged. That
+  file is bundled into the deployed function
   by `outputFileTracingIncludes` in next.config.ts; a runtime path is invisible
   to Next's dependency tracing, so without that entry it works locally and
   fails in production.
@@ -131,12 +132,70 @@ writing one-off styled elements, so later chunks stay consistent.
 - The assistant has no screen awareness yet. The prompt tells it to ask which
   screen the reviewer means. Chunk 6 replaces that.
 
+## Feedback capture
+
+- **There is no "ask" versus "report" mode.** A reviewer does not know which of
+  the two they are doing until they have said it, so making them classify their
+  own thought before typing it is the friction this replaces. They type; the
+  assistant answers, and calls the `record_feedback` tool for anything that
+  reads as a finding.
+- The tool is defined in `src/lib/feedback-tool.ts`, and its field descriptions
+  are instructions as much as a schema -- Claude reads them, so they carry as
+  much weight as `prompts/assistant.md`.
+- The route handler writes the row, not the model. Everything arriving from a
+  tool call is trimmed and validated exactly like form input, and an item with
+  no text in any field is refused back to Claude as a tool error.
+- **Undo, not confirm.** Every recorded item leaves a receipt card inline in the
+  conversation with a one-click delete and an editable severity. Asking
+  permission before each write would put a dialog in the middle of every
+  sentence; letting them delete a wrong one costs a click.
+- Severity is Claude's guess and the reviewer's correction. Both work from the
+  same wording, because `SEVERITY_DESCRIPTIONS` in `src/lib/feedback.ts` is
+  rendered into the tool schema *and* shown in the picker.
+- What has already been logged goes into the system prompt, not the message
+  history -- the transcript says what was *said*, the feedback rows say what was
+  *kept*, and they diverge the moment a reviewer deletes something. This is what
+  stops the same complaint being logged twice.
+- The flag button beside the composer opens a short form that writes directly,
+  without Claude. It exists for reviewers who would rather fill something in,
+  and so that an Anthropic outage cannot cost a whole review session.
+- `/api/chat` streams **newline-delimited JSON**, not plain text, because one
+  turn can produce prose and feedback rows and the panel has to tell them apart.
+  Events are `{"t":"text","v":"…"}` and `{"t":"feedback","v":{…}}`.
+- Reviewer-owned routes (`/api/feedback`, `/api/feedback/[id]`,
+  `/api/review/finish`) all scope their WHERE to the session id from the cookie,
+  so knowing an item's UUID is not enough to change or delete it.
+- "Finish review" is one nullable timestamp, `session.completed_at`. Reopening
+  clears it, because a reviewer always remembers a fourth thing right after
+  pressing finish and a dead end there pushes them back to email.
+
+## Admin review
+
+- `/admin/[prototypeId]/feedback` lists everything across all sessions, grouped
+  by version.
+- Two different orders, deliberately: versions newest-first because the current
+  version is what is actionable, items worst-first inside a version because
+  reading the page is triage. Group before sorting, or a blocker on an old
+  version drags that whole version to the top.
+- Filters live in the URL as search params and are rendered as links, so the
+  page needs no client JavaScript, the back button works, and a filtered view
+  can be sent to someone as a link.
+- Disposition saves on change with no save button. Untriaged is drawn as a
+  dashed outline and every disposition as a fill -- "won't do" is the quietest
+  fill and was indistinguishable from untriaged when both were neutral.
+- The page reads every row for the prototype and filters in memory. That is the
+  right trade at one designer's scale; when it stops being, push the WHERE down
+  and compute the filter counts with a GROUP BY.
+
 ## Where things are
 - `src/db/schema.ts`          Drizzle schema, all tables from the data model above
 - `src/db/index.ts`           Database client (`getDb()`)
 - `src/lib/auth.ts`           Admin cookie session (HMAC signed, httpOnly)
 - `src/lib/reviewer-auth.ts`  Reviewer pass and session cookies, per prototype
 - `src/lib/assistant-context.ts`  Builds the assistant's system prompt
+- `src/lib/feedback.ts`       Severity and disposition wording, shared everywhere
+- `src/lib/feedback-tool.ts`  The `record_feedback` tool Claude is given
+- `src/lib/reviewer-session.ts`   "Which review session is this, and is it allowed?"
 - `prompts/assistant.md`      The global assistant instructions, hand-edited
 - `src/lib/signing.ts`        HMAC signing shared by both
 - `src/lib/password.ts`       Reviewer password hashing (PBKDF2 via Web Crypto)
@@ -144,6 +203,7 @@ writing one-off styled elements, so later chunks stay consistent.
 - `src/lib/env.ts`            Reads and validates environment variables
 - `src/app/p/[versionId]/`    Serves prototype HTML on our own origin
 - `src/app/r/[prototypeId]/`  Reviewer entry, and the review page
+- `src/app/admin/(dashboard)/[prototypeId]/feedback/`  Reading and triaging feedback
 - `middleware.ts`             Protects every /admin route except /admin/login
 - `drizzle/`                  Generated SQL migrations, committed to the repo
 
@@ -172,10 +232,16 @@ writing one-off styled elements, so later chunks stay consistent.
 
 ## Build progress
 Built so far: chunks 1 (foundation), 2 (upload and same-origin serving),
-3 (reviewer entry and prototype render) and 4 (the assistant).
-Next up: chunk 5 (feedback capture and admin review) -- the shippable
-checkpoint, after which the plan says to stop and put a real prototype through
-it before building anything else.
+3 (reviewer entry and prototype render), 4 (the assistant) and 5 (feedback
+capture and admin review).
+
+**Chunk 5 was the shippable checkpoint.** The plan says to stop here and put a
+real prototype through it -- with real reviewers -- before building anything
+else. Everything after this is enhancement, and enhancement built on an
+untested assumption is the expensive kind.
+
+Next up when that is done: chunk 6 (iframe bridge, screen detection and element
+select).
 
 ## Note on real prototypes
 The first real prototype put through this marks its screens with

@@ -1,13 +1,13 @@
 import type { Metadata } from "next";
-import { desc, eq } from "drizzle-orm";
+import { count, desc, eq, sql } from "drizzle-orm";
 import { notFound } from "next/navigation";
 
 import { ButtonLink } from "@/components/m3/button";
 import { CopyLink } from "@/components/m3/copy-link";
 import { Card } from "@/components/m3/card";
-import { OpenInNewIcon } from "@/components/m3/icons";
+import { FlagIcon, OpenInNewIcon } from "@/components/m3/icons";
 import { getDb } from "@/db";
-import { prototype, version } from "@/db/schema";
+import { feedback, prototype, session, version } from "@/db/schema";
 
 export const metadata: Metadata = { title: "Prototype · Admin" };
 export const dynamic = "force-dynamic";
@@ -60,6 +60,22 @@ export default async function PrototypeDetailPage({
     .orderBy(desc(version.createdAt));
 
   const current = versions.find((v) => v.isCurrent) ?? versions[0];
+
+  // How much there is to read, and how much of it has not been triaged. The
+  // untriaged number is the one that says whether this needs attention today.
+  const [tally] = await db
+    .select({
+      total: count(),
+      untriaged: count(
+        // count() skips nulls, so counting the *disposition being null* means
+        // counting a value that is non-null exactly when the row is untriaged.
+        sql`case when ${feedback.disposition} is null then 1 end`,
+      ),
+    })
+    .from(feedback)
+    .innerJoin(session, eq(session.id, feedback.sessionId))
+    .innerJoin(version, eq(version.id, session.versionId))
+    .where(eq(version.prototypeId, prototypeId));
 
   return (
     <div className="flex flex-col gap-6">
@@ -119,6 +135,32 @@ export default async function PrototypeDetailPage({
             </ul>
           </Detail>
         </dl>
+      </Card>
+
+      <Card variant="filled" className="flex flex-wrap items-center gap-4 p-6">
+        <span className="flex size-12 shrink-0 items-center justify-center rounded-full bg-surface-container-highest text-on-surface-variant">
+          <FlagIcon />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-title-medium text-on-surface">
+            {tally.total === 0
+              ? "No feedback yet"
+              : `${tally.total} ${tally.total === 1 ? "item" : "items"} of feedback`}
+          </p>
+          <p className="text-body-medium text-on-surface-variant">
+            {tally.total === 0
+              ? "It appears here as reviewers work through the prototype."
+              : tally.untriaged === 0
+                ? "All triaged."
+                : `${tally.untriaged} still to triage.`}
+          </p>
+        </div>
+        <ButtonLink
+          href={`/admin/${row.id}/feedback`}
+          variant={tally.untriaged > 0 ? "filled" : "outlined"}
+        >
+          Read feedback
+        </ButtonLink>
       </Card>
 
       <section className="flex flex-col gap-3">
