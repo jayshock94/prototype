@@ -111,11 +111,33 @@ writing one-off styled elements, so later chunks stay consistent.
   pass for that version's prototype. Everyone else gets a 404 rather than a
   403, so nothing is revealed about which versions exist.
 
+## The assistant
+- Every call to Claude goes through `/api/chat`. `ANTHROPIC_API_KEY` is read in
+  `src/lib/env.ts` and used only there -- it must never reach the browser.
+- The system prompt is `prompts/assistant.md` (global, hand-edited) plus
+  per-prototype context appended at request time: name, description, knowledge
+  base, and the not-built list. That file is bundled into the deployed function
+  by `outputFileTracingIncludes` in next.config.ts; a runtime path is invisible
+  to Next's dependency tracing, so without that entry it works locally and
+  fails in production.
+- Editing `prompts/assistant.md` needs a redeploy. It is read once per server
+  instance, not per message.
+- Replies stream. Every message, in both directions, is written to the
+  `message` table, including a partial or failed answer -- the reviewer saw it,
+  so the transcript should show it.
+- The last `HISTORY_LIMIT` messages are resent on each call to give the
+  conversation memory; the constant in `src/app/api/chat/route.ts` says where
+  to tune it.
+- The assistant has no screen awareness yet. The prompt tells it to ask which
+  screen the reviewer means. Chunk 6 replaces that.
+
 ## Where things are
 - `src/db/schema.ts`          Drizzle schema, all tables from the data model above
 - `src/db/index.ts`           Database client (`getDb()`)
 - `src/lib/auth.ts`           Admin cookie session (HMAC signed, httpOnly)
 - `src/lib/reviewer-auth.ts`  Reviewer pass and session cookies, per prototype
+- `src/lib/assistant-context.ts`  Builds the assistant's system prompt
+- `prompts/assistant.md`      The global assistant instructions, hand-edited
 - `src/lib/signing.ts`        HMAC signing shared by both
 - `src/lib/password.ts`       Reviewer password hashing (PBKDF2 via Web Crypto)
 - `src/lib/prototype-storage.ts`  Everything to do with Vercel Blob
@@ -149,9 +171,11 @@ writing one-off styled elements, so later chunks stay consistent.
   file input has no `name`.
 
 ## Build progress
-Built so far: chunks 1 (foundation), 2 (upload and same-origin serving) and
-3 (reviewer entry and prototype render).
-Next up: chunk 4 (the assistant).
+Built so far: chunks 1 (foundation), 2 (upload and same-origin serving),
+3 (reviewer entry and prototype render) and 4 (the assistant).
+Next up: chunk 5 (feedback capture and admin review) -- the shippable
+checkpoint, after which the plan says to stop and put a real prototype through
+it before building anything else.
 
 ## Note on real prototypes
 The first real prototype put through this marks its screens with

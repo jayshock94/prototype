@@ -9,7 +9,7 @@ bottom and you will have it running.
 
 ## What exists right now
 
-This is **chunk 3 of 10**. Working today:
+This is **chunk 4 of 10**. Working today:
 
 - Next.js app with the Material 3 design system
 - The full database schema, all ten tables
@@ -20,10 +20,10 @@ This is **chunk 3 of 10**. Working today:
 - Prototypes served from this app's own domain at `/p/<versionId>`
 - An admin dashboard listing prototypes, and a detail page per prototype
 - A reviewer link you can send out: password, name picker, then the prototype
-  with space reserved for the assistant
+- An AI assistant beside the prototype that answers from its knowledge base
 
-Not built yet: the assistant itself, annotation, tasks and acceptance
-criteria, and versions. Those are chunks 4 through 10 in
+Not built yet: capturing feedback automatically, annotation, tasks and
+acceptance criteria, and versions. Those are chunks 5 through 10 in
 `claudecodebuildprompts.md`.
 
 ---
@@ -157,7 +157,7 @@ should get you to the empty dashboard.
 | `ADMIN_PASSWORD` | Yes | The only admin credential. No accounts, no reset. |
 | `SESSION_SECRET` | No | Signs the admin cookie. Derived from `ADMIN_PASSWORD` if unset. |
 | `BLOB_READ_WRITE_TOKEN` | Yes | Vercel Blob, for uploaded prototype files. |
-| `ANTHROPIC_API_KEY` | Chunk 4 | The assistant. Server-side only, never sent to the browser. |
+| `ANTHROPIC_API_KEY` | Yes | The assistant. Server-side only, never sent to the browser. |
 
 ---
 
@@ -193,6 +193,7 @@ src/
       auth-actions.ts     Sign in and sign out
     p/[versionId]/        Serves prototype HTML on our own origin
     r/[prototypeId]/      Reviewer entry: password, name, then the review page
+    api/chat/             The assistant. The only place the Anthropic key is used
     api/prototype-upload/ Issues the token the browser uses to upload
     globals.css           Material 3 tokens. The design system lives here.
     layout.tsx            Root layout, loads Roboto
@@ -200,6 +201,10 @@ src/
   db/
     schema.ts             All ten tables
     index.ts              Database connection
+prompts/
+  assistant.md            What the assistant is told, for every prototype.
+                          Edit this and redeploy -- it decides how useful it is.
+src/
   lib/
     auth.ts               Admin cookie session, signed so it cannot be forged
     reviewer-auth.ts      Reviewer cookies, scoped to one prototype
@@ -308,6 +313,15 @@ rather than the pooled one.
 **The upload form asked me to re-enter the password after an error.** React
 clears form fields after a submit and there is no way around it. Your *file*
 is kept, though — it is held in the page rather than in the file picker.
+
+**The assistant says it is not set up.** `ANTHROPIC_API_KEY` is missing. Add it
+under Settings → Environments → Production and redeploy.
+
+**The assistant answers vaguely, or makes things up.** Two causes worth checking
+in order: the prototype has no knowledge base (add one on upload), or
+`prompts/assistant.md` still has my placeholder text in it. That file is the
+one that decides whether any of this is useful — it is meant to be replaced
+with your own walkthrough instructions.
 
 **"That file is too large."** The limit is 50 MB. That is a guard against
 picking the wrong file by accident, not a technical ceiling — the browser

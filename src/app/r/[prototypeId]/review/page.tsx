@@ -1,17 +1,18 @@
 import type { Metadata } from "next";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 
 import { getDb } from "@/db";
-import { prototype, session, version } from "@/db/schema";
+import { message, prototype, session, version } from "@/db/schema";
 import {
   hasValidPass,
   passCookieName,
   readSessionId,
   sessionCookieName,
 } from "@/lib/reviewer-auth";
-import { AssistantPanel } from "./assistant-panel";
+import { hasAnthropicApiKey } from "@/lib/env";
+import { AssistantPanel, type ChatMessage } from "./assistant-panel";
 
 export const metadata: Metadata = {
   title: "Review",
@@ -87,6 +88,14 @@ export default async function ReviewPage({
 
   if (!visit) redirect(`/r/${prototypeId}`);
 
+  // Reload the conversation so a reviewer who refreshes, or comes back to the
+  // tab, does not find an empty panel and wonder if it was lost.
+  const transcript = await db
+    .select({ id: message.id, role: message.role, content: message.content })
+    .from(message)
+    .where(eq(message.sessionId, sessionId))
+    .orderBy(asc(message.createdAt));
+
   return (
     <div className="flex h-dvh flex-col bg-surface-container-lowest">
       <header className="flex shrink-0 items-center gap-3 border-b border-outline-variant bg-surface-container px-4 py-2 text-on-surface sm:px-6">
@@ -128,7 +137,11 @@ export default async function ReviewPage({
           />
         </div>
 
-        <AssistantPanel />
+        <AssistantPanel
+          prototypeId={prototypeId}
+          initialMessages={transcript as ChatMessage[]}
+          configured={hasAnthropicApiKey()}
+        />
       </div>
     </div>
   );
