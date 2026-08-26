@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { and, desc, eq } from "drizzle-orm";
 
-import { Button } from "@/components/m3/button";
+import Link from "next/link";
+
+import { ButtonLink } from "@/components/m3/button";
 import { Card } from "@/components/m3/card";
 import { AddIcon, ErrorIcon, InventoryIcon } from "@/components/m3/icons";
 import { getDb } from "@/db";
@@ -93,8 +95,15 @@ function EmptyState() {
         <h2 className="text-title-large text-on-surface">No prototypes yet</h2>
         <p className="text-body-medium text-on-surface-variant">
           Upload an HTML prototype and the portal will give you a link to send
-          reviewers. Uploading arrives in the next chunk of work.
+          reviewers.
         </p>
+        <ButtonLink
+          href="/admin/new"
+          variant="filled"
+          icon={<AddIcon className="size-[18px]" />}
+        >
+          New prototype
+        </ButtonLink>
       </div>
     </Card>
   );
@@ -105,22 +114,24 @@ function PrototypeList({ rows }: { rows: Row[] }) {
     <Card variant="outlined" className="overflow-hidden p-0">
       <ul className="divide-y divide-outline-variant">
         {rows.map((row) => (
-          <li
-            key={row.id}
-            className="m3-state-layer flex flex-wrap items-center gap-x-4 gap-y-1 px-6 py-4 text-on-surface"
-          >
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-title-medium">{row.name}</p>
-              <p className="truncate text-body-small text-on-surface-variant">
-                {row.ticket ?? "No ticket"}
-              </p>
-            </div>
-            <span className="rounded-full bg-secondary-container px-3 py-1 text-label-medium text-on-secondary-container">
-              {row.currentVersionLabel ?? "No version"}
-            </span>
-            <span className="text-body-small text-on-surface-variant">
-              {formatDate(row.createdAt)}
-            </span>
+          <li key={row.id}>
+            <Link
+              href={`/admin/${row.id}`}
+              className="m3-state-layer flex flex-wrap items-center gap-x-4 gap-y-1 px-6 py-4 text-on-surface"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-title-medium">{row.name}</p>
+                <p className="truncate text-body-small text-on-surface-variant">
+                  {row.ticket ?? "No ticket"}
+                </p>
+              </div>
+              <span className="rounded-full bg-secondary-container px-3 py-1 text-label-medium text-on-secondary-container">
+                {row.currentVersionLabel ?? "No version"}
+              </span>
+              <span className="text-body-small text-on-surface-variant">
+                {formatDate(row.createdAt)}
+              </span>
+            </Link>
           </li>
         ))}
       </ul>
@@ -158,10 +169,13 @@ export default async function AdminDashboard() {
           </p>
         </div>
 
-        {/* TODO chunk 2: point this at /admin/new once the upload form exists. */}
-        <Button variant="filled" icon={<AddIcon className="size-[18px]" />} disabled>
+        <ButtonLink
+          href="/admin/new"
+          variant="filled"
+          icon={<AddIcon className="size-[18px]" />}
+        >
           New prototype
-        </Button>
+        </ButtonLink>
       </div>
 
       {failure ? (

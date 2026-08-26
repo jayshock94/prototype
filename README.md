@@ -9,15 +9,18 @@ bottom and you will have it running.
 
 ## What exists right now
 
-This is **chunk 1 of 10** — the foundation. Working today:
+This is **chunk 2 of 10**. Working today:
 
 - Next.js app with the Material 3 design system
 - The full database schema, all ten tables
 - Admin sign-in with a single password
-- An admin dashboard listing prototypes (empty until chunk 2 adds uploading)
+- Upload a prototype: name, ticket, description, reviewer password, reviewer
+  names, the HTML file, and a knowledge base
+- Prototypes served from this app's own domain at `/p/<versionId>`
+- An admin dashboard listing prototypes, and a detail page per prototype
 
-Not built yet: uploading prototypes, the reviewer side, the assistant,
-annotation, and versions. Those are chunks 2 through 10 in
+Not built yet: the reviewer side, the assistant, annotation, tasks and
+acceptance criteria, and versions. Those are chunks 3 through 10 in
 `claudecodebuildprompts.md`.
 
 ---
@@ -45,19 +48,36 @@ locally and on Vercel.
 Pooled matters. The app runs as many short-lived serverless functions, and the
 pooled endpoint is what stops them exhausting the database's connections.
 
-### 3. Create your settings file
+### 3. Get a file store
+
+Uploaded prototype HTML goes to Vercel Blob.
+
+1. In the Vercel dashboard go to **Storage → Create → Blob**.
+2. Connect the store to this project.
+3. Install the CLI (`npm i -g vercel`), run `vercel link` once to connect this
+   folder to the project, then `vercel env pull` to copy the credentials into
+   `.env.local`.
+
+That gives you `BLOB_READ_WRITE_TOKEN`. Uploading will not work without it — the
+new-prototype page says so plainly rather than failing on submit.
+
+### 4. Create your settings file
+
+If `vercel env pull` already made `.env.local`, just add the missing values.
+Otherwise:
 
 ```bash
 cp .env.example .env.local
 ```
 
-Open `.env.local` and set two values:
+Open `.env.local` and set:
 
-- `DATABASE_URL` — the connection string you just copied
+- `DATABASE_URL` — the connection string you copied from Neon
 - `ADMIN_PASSWORD` — your admin password. Generate a good one with
   `openssl rand -base64 24`
+- `BLOB_READ_WRITE_TOKEN` — from `vercel env pull`
 
-### 4. Create the database tables
+### 5. Create the database tables
 
 ```bash
 npm run db:migrate
@@ -67,7 +87,7 @@ This runs the SQL in `drizzle/` against your database. It prints what it is
 about to do before doing it. Run it once now, and again any time a later chunk
 changes the schema.
 
-### 5. Start it
+### 6. Start it
 
 ```bash
 npm run dev
@@ -76,8 +96,12 @@ npm run dev
 Open <http://localhost:3000>. You will be sent to the sign-in page. Enter your
 `ADMIN_PASSWORD` and you should land on an empty prototype list.
 
-**That is chunk 1 done.** An empty list is the correct result — there is no way
-to add a prototype until chunk 2.
+Click **New prototype**, fill it in, and upload a self-contained HTML file. You
+land on the prototype's detail page with an **Open v1** button, which opens the
+prototype at a URL on your own domain.
+
+**That is chunk 2 done.** The reviewer link shown on the detail page does not
+work yet — that is chunk 3.
 
 ---
 
@@ -99,7 +123,8 @@ The repository is already set up. Commit and push your branch.
    | `DATABASE_URL` | your pooled Neon connection string |
    | `ADMIN_PASSWORD` | your admin password |
 
-   Add both to Production, Preview, and Development.
+   Add both to Production, Preview, and Development. `BLOB_READ_WRITE_TOKEN` is
+   added for you when you connect the Blob store to the project.
 
 5. Deploy.
 
@@ -125,7 +150,7 @@ should get you to the empty dashboard.
 | `DATABASE_URL` | Yes | Postgres connection string. Use the pooled one. |
 | `ADMIN_PASSWORD` | Yes | The only admin credential. No accounts, no reset. |
 | `SESSION_SECRET` | No | Signs the admin cookie. Derived from `ADMIN_PASSWORD` if unset. |
-| `BLOB_READ_WRITE_TOKEN` | Chunk 2 | Vercel Blob, for uploaded prototype files. |
+| `BLOB_READ_WRITE_TOKEN` | Yes | Vercel Blob, for uploaded prototype files. |
 | `ANTHROPIC_API_KEY` | Chunk 4 | The assistant. Server-side only, never sent to the browser. |
 
 ---
@@ -155,8 +180,12 @@ src/
   app/
     admin/
       (dashboard)/        Signed-in admin pages and their shared chrome
+        page.tsx          The prototype list
+        new/              Upload form and the action that creates a prototype
+        [prototypeId]/    One prototype: its details and its versions
       login/              Sign-in page — deliberately outside (dashboard)
       auth-actions.ts     Sign in and sign out
+    p/[versionId]/        Serves prototype HTML on our own origin
     globals.css           Material 3 tokens. The design system lives here.
     layout.tsx            Root layout, loads Roboto
   components/m3/          Hand-written Material 3 components
@@ -164,11 +193,29 @@ src/
     schema.ts             All ten tables
     index.ts              Database connection
   lib/
-    auth.ts               Cookie session, signed so it cannot be forged
+    auth.ts               Admin cookie session, signed so it cannot be forged
+    password.ts           Reviewer password hashing
+    prototype-storage.ts  Everything to do with Vercel Blob
     env.ts                Environment variables, read in one place
 drizzle/                  Generated SQL migrations — commit these
 middleware.ts             Blocks every /admin route without a valid session
 ```
+
+### Why prototypes are served from `/p/<versionId>`
+
+The review page shows a prototype in an iframe, and later chunks need the page
+around it to read and change what is inside that iframe — to know which screen
+you are on, to outline a button the assistant is talking about. Browsers only
+allow that when the iframe's contents come from the same domain as the page.
+
+A Vercel Blob URL is a different domain. Pointing the iframe straight at Blob
+would look fine and then fail the moment anything tried to touch the prototype.
+So the file is fetched on the server and re-served from this app's own domain.
+
+The files are stored as **private** blobs, which means they cannot be fetched
+from Blob at all without the store's secret token. `/p/<versionId>` is the only
+way in. That turns the rule into something the storage enforces rather than
+something everyone has to remember.
 
 ### Why the admin login page sits outside `(dashboard)`
 
@@ -227,3 +274,16 @@ also signs you out everywhere unless you have set `SESSION_SECRET`.
 
 **Too many database connections.** You are on the direct connection string
 rather than the pooled one.
+
+**"File storage is not connected yet" on the new-prototype page.**
+`BLOB_READ_WRITE_TOKEN` is missing. See step 3 above.
+
+**The upload form cleared my file when it showed an error.** Browsers do not let
+a site put a file back into a file picker, and React clears the other fields
+after a submit, so the file and the reviewer password have to be entered again.
+Most mistakes are caught before that happens — the wrong kind of file, or one
+that is too big, is rejected the moment you choose it.
+
+**"That file is too large."** The limit is 4 MB, because Vercel caps what a
+server function can receive. If your prototypes are routinely bigger, that is
+worth telling me — it needs a different upload route, not a bigger number.

@@ -61,6 +61,30 @@ export function sessionSecret(): string {
   return `derived-from-admin-password:${adminPassword()}`;
 }
 
+/**
+ * Token for the Vercel Blob store that holds uploaded prototype files.
+ *
+ * Vercel sets this automatically once a Blob store is connected to the
+ * project. Locally you get it with `vercel env pull`.
+ */
+export function blobToken(): string {
+  return required(
+    "BLOB_READ_WRITE_TOKEN",
+    "This is the Vercel Blob store token, used to store uploaded prototype " +
+      "HTML. Create a Blob store in the Vercel dashboard under Storage, " +
+      "connect it to this project, then run `vercel env pull` to copy the " +
+      "token into .env.local.",
+  );
+}
+
+/** True when a Blob store is configured. Lets the upload form explain itself
+ *  before you fill it in, rather than failing on submit. */
+export function hasBlobToken(): boolean {
+  return Boolean(
+    process.env.BLOB_READ_WRITE_TOKEN && process.env.BLOB_READ_WRITE_TOKEN.trim() !== "",
+  );
+}
+
 /** True when the database is configured at all. Lets pages show a friendly
  *  "not connected yet" state instead of a stack trace. */
 export function hasDatabaseUrl(): boolean {

@@ -84,18 +84,41 @@ tokens plus a handful of hand-written components.
 - Interactive elements need a state layer -- the translucent overlay M3 puts over
   a component on hover, focus, and press. Use the `m3-state-layer` class from the
   components layer in `globals.css` rather than hand-rolling hover colours.
+- If you set a surface background on a container that might hold a text field,
+  also set `--m3-field-surface` to the same colour role. A floating label paints
+  a notch over the field's outline, and that notch has to match whatever is
+  behind it. `Card` does this for itself; a layout or a hand-rolled wrapper has
+  to say it explicitly.
 
 Hand-written components live in `src/components/m3/`. Add to them rather than
 writing one-off styled elements, so later chunks stay consistent.
 
 ## Where things are
-- `src/db/schema.ts`   Drizzle schema, all tables from the data model above
-- `src/db/index.ts`    Database client
-- `src/lib/auth.ts`    Admin cookie session (HMAC signed, httpOnly)
-- `src/lib/env.ts`     Reads and validates environment variables
-- `middleware.ts`      Protects every /admin route except /admin/login
-- `drizzle/`           Generated SQL migrations, committed to the repo
+- `src/db/schema.ts`          Drizzle schema, all tables from the data model above
+- `src/db/index.ts`           Database client (`getDb()`)
+- `src/lib/auth.ts`           Admin cookie session (HMAC signed, httpOnly)
+- `src/lib/password.ts`       Reviewer password hashing (PBKDF2 via Web Crypto)
+- `src/lib/prototype-storage.ts`  Everything to do with Vercel Blob
+- `src/lib/env.ts`            Reads and validates environment variables
+- `src/app/p/[versionId]/`    Serves prototype HTML on our own origin
+- `middleware.ts`             Protects every /admin route except /admin/login
+- `drizzle/`                  Generated SQL migrations, committed to the repo
+
+## Uploads
+- Prototype HTML is stored in Vercel Blob with `access: "private"`, so the file
+  cannot be fetched by URL at all. The only way to see it is through
+  `/p/[versionId]`, which means the same-origin rule is enforced by the storage
+  layer rather than by everyone remembering it.
+- A server action carries the upload, so it is bounded by Vercel's 4.5 MB limit
+  on a function's request body. `MAX_PROTOTYPE_BYTES` reflects that. If
+  prototypes outgrow it, switch to `@vercel/blob/client`, which uploads straight
+  from the browser.
+- Validate uploads on the client as well as the server. Not for speed: a browser
+  will not let JavaScript put a file back into a file input, so a form that
+  round-trips with an error has silently lost the user's file. React also resets
+  uncontrolled fields after a form action, which clears the password too. Catch
+  what you can at selection time; the server still re-checks everything.
 
 ## Build progress
-Built so far: chunk 1 (foundation).
-Next up: chunk 2 (prototype upload and same-origin serving).
+Built so far: chunks 1 (foundation) and 2 (upload and same-origin serving).
+Next up: chunk 3 (reviewer entry and prototype render).

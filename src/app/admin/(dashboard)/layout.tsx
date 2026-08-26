@@ -1,3 +1,5 @@
+import type { CSSProperties } from "react";
+
 import { TopAppBar } from "@/components/m3/top-app-bar";
 import { IconButton } from "@/components/m3/icon-button";
 import { LogoutIcon } from "@/components/m3/icons";
@@ -18,7 +20,20 @@ import { logout } from "../auth-actions";
  */
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-dvh bg-surface-container-lowest">
+    <div
+      className="min-h-dvh bg-surface-container-lowest"
+      /*
+       * Any container that sets a surface background and may hold text fields
+       * has to announce which surface it is, so a field's floating label can
+       * paint a notch that matches. Card does this for itself; a layout has to
+       * say it explicitly. Keep this in step with the background class above.
+       */
+      style={
+        {
+          "--m3-field-surface": "var(--md-sys-color-surface-container-lowest)",
+        } as CSSProperties
+      }
+    >
       <TopAppBar
         overline="Admin"
         title="Prototype Review Portal"
