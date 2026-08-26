@@ -61,6 +61,12 @@ export function sessionSecret(): string {
   return `derived-from-admin-password:${adminPassword()}`;
 }
 
+/** True when an admin password is configured at all. Lets the sign-in page
+ *  explain itself instead of throwing when the variable is missing. */
+export function hasAdminPassword(): boolean {
+  return Boolean(process.env.ADMIN_PASSWORD && process.env.ADMIN_PASSWORD.trim() !== "");
+}
+
 /**
  * Token for the Vercel Blob store that holds uploaded prototype files.
  *

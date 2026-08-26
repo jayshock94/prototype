@@ -18,6 +18,7 @@ import {
   createSessionToken,
   isValidAdminPassword,
 } from "@/lib/auth";
+import { hasAdminPassword } from "@/lib/env";
 
 export type LoginState = { error?: string };
 
@@ -34,6 +35,16 @@ export async function login(
   const next = requested.startsWith("/") && !requested.startsWith("//")
     ? requested
     : "/admin";
+
+  // Checked here as well as on the page: a form can be submitted without the
+  // page having decided to render it, and throwing from here produces an error
+  // page that explains nothing.
+  if (!hasAdminPassword()) {
+    return {
+      error:
+        "No admin password is configured on the server. Set ADMIN_PASSWORD and redeploy.",
+    };
+  }
 
   if (!password) {
     return { error: "Enter the admin password." };
