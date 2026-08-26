@@ -1,0 +1,68 @@
+/**
+ * Environment variables, read in one place.
+ *
+ * Reading them here rather than sprinkling `process.env.X` through the codebase
+ * means a missing variable produces one clear error naming the variable and
+ * where to set it, instead of a confusing crash deep inside a page.
+ *
+ * This module is server-only. Nothing here is ever sent to the browser.
+ */
+
+import "server-only";
+
+class MissingEnvError extends Error {
+  constructor(name: string, hint: string) {
+    super(
+      `Missing environment variable ${name}.\n\n${hint}\n\n` +
+        `Set it in .env.local for local development, or in Project Settings -> ` +
+        `Environment Variables on Vercel. See README.md.`,
+    );
+    this.name = "MissingEnvError";
+  }
+}
+
+function required(name: string, hint: string): string {
+  const value = process.env[name];
+  if (!value || value.trim() === "") {
+    throw new MissingEnvError(name, hint);
+  }
+  return value;
+}
+
+/** Postgres connection string. Neon and Vercel Postgres both provide one. */
+export function databaseUrl(): string {
+  return required(
+    "DATABASE_URL",
+    "This is the Postgres connection string. On Neon it is on the project " +
+      "dashboard under Connection Details -- use the pooled one.",
+  );
+}
+
+/** The single admin password. There are no admin accounts, just this. */
+export function adminPassword(): string {
+  return required(
+    "ADMIN_PASSWORD",
+    "Pick a long random password. This is the only thing standing between the " +
+      "internet and your admin area.",
+  );
+}
+
+/**
+ * Key used to sign the admin session cookie so it cannot be forged.
+ *
+ * Optional. If unset it is derived from ADMIN_PASSWORD, which is safe -- the
+ * side effect is that changing the admin password logs you out everywhere,
+ * which is what you would want anyway. Set it explicitly if you would rather
+ * change the password without being logged out.
+ */
+export function sessionSecret(): string {
+  const explicit = process.env.SESSION_SECRET;
+  if (explicit && explicit.trim() !== "") return explicit;
+  return `derived-from-admin-password:${adminPassword()}`;
+}
+
+/** True when the database is configured at all. Lets pages show a friendly
+ *  "not connected yet" state instead of a stack trace. */
+export function hasDatabaseUrl(): boolean {
+  return Boolean(process.env.DATABASE_URL && process.env.DATABASE_URL.trim() !== "");
+}
