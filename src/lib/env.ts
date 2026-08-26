@@ -91,6 +91,28 @@ export function hasBlobToken(): boolean {
   );
 }
 
+/**
+ * Key for the Anthropic API, used by the reviewer assistant.
+ *
+ * Server only. It must never be sent to the browser -- every call to Claude
+ * goes through /api/chat, which runs on the server for exactly this reason.
+ */
+export function anthropicApiKey(): string {
+  return required(
+    "ANTHROPIC_API_KEY",
+    "This is the key for the AI assistant, from console.anthropic.com. " +
+      "It is read only on the server and never reaches the browser.",
+  );
+}
+
+/** True when the assistant is configured. Lets the review page say so rather
+ *  than failing on the reviewer's first message. */
+export function hasAnthropicApiKey(): boolean {
+  return Boolean(
+    process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY.trim() !== "",
+  );
+}
+
 /** True when the database is configured at all. Lets pages show a friendly
  *  "not connected yet" state instead of a stack trace. */
 export function hasDatabaseUrl(): boolean {

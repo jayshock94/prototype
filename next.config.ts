@@ -1,6 +1,17 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  /**
+   * The assistant reads prompts/assistant.md at runtime. Next.js works out
+   * which files a function needs by following imports, and a path built at
+   * runtime is invisible to that -- so without this the file is missing from
+   * the deployment and the assistant fails in production while working
+   * perfectly in development.
+   */
+  outputFileTracingIncludes: {
+    "/api/chat": ["./prompts/**"],
+  },
+
   experimental: {
     serverActions: {
       /**

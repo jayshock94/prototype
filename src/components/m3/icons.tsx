@@ -80,3 +80,11 @@ export function SparkIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+export function SendIcon({ className }: IconProps) {
+  return (
+    <svg {...svgProps(className)}>
+      <path d="M120-160v-640l760 320-760 320Zm80-120 474-200-474-200v145l240 55-240 55v145Zm0 0v-400 400Z" />
+    </svg>
+  );
+}
