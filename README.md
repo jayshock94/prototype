@@ -15,7 +15,8 @@ This is **chunk 2 of 10**. Working today:
 - The full database schema, all ten tables
 - Admin sign-in with a single password
 - Upload a prototype: name, ticket, description, reviewer password, reviewer
-  names, the HTML file, and a knowledge base
+  names, the HTML file, and a knowledge base. Large files are fine -- the
+  browser sends them straight to storage, with a progress bar
 - Prototypes served from this app's own domain at `/p/<versionId>`
 - An admin dashboard listing prototypes, and a detail page per prototype
 
@@ -186,6 +187,7 @@ src/
       login/              Sign-in page — deliberately outside (dashboard)
       auth-actions.ts     Sign in and sign out
     p/[versionId]/        Serves prototype HTML on our own origin
+    api/prototype-upload/ Issues the token the browser uses to upload
     globals.css           Material 3 tokens. The design system lives here.
     layout.tsx            Root layout, loads Roboto
   components/m3/          Hand-written Material 3 components
@@ -216,6 +218,23 @@ The files are stored as **private** blobs, which means they cannot be fetched
 from Blob at all without the store's secret token. `/p/<versionId>` is the only
 way in. That turns the rule into something the storage enforces rather than
 something everyone has to remember.
+
+### Why the browser uploads the file directly
+
+A Vercel function can only receive a 4.5 MB request body. A self-contained
+prototype with images inlined goes past that easily — an 8 MB file is normal.
+No setting lifts that cap.
+
+So the file never goes through the app. The browser asks
+`/api/prototype-upload` for permission, gets a short-lived token good for one
+file, and sends the file straight to storage. Only the resulting link comes back
+to the app, along with the rest of the form.
+
+Because that link arrives from the browser, the server does not take it on
+trust: it asks storage whether the file really exists, checks it belongs to the
+prototype being created, and reads the first few kilobytes back to confirm it
+is HTML. If anything fails, the uploaded file is deleted rather than left
+behind.
 
 ### Why the admin login page sits outside `(dashboard)`
 
@@ -278,12 +297,12 @@ rather than the pooled one.
 **"File storage is not connected yet" on the new-prototype page.**
 `BLOB_READ_WRITE_TOKEN` is missing. See step 3 above.
 
-**The upload form cleared my file when it showed an error.** Browsers do not let
-a site put a file back into a file picker, and React clears the other fields
-after a submit, so the file and the reviewer password have to be entered again.
-Most mistakes are caught before that happens — the wrong kind of file, or one
-that is too big, is rejected the moment you choose it.
+**The upload form asked me to re-enter the password after an error.** React
+clears form fields after a submit and there is no way around it. Your *file*
+is kept, though — it is held in the page rather than in the file picker.
 
-**"That file is too large."** The limit is 4 MB, because Vercel caps what a
-server function can receive. If your prototypes are routinely bigger, that is
-worth telling me — it needs a different upload route, not a bigger number.
+**"That file is too large."** The limit is 50 MB. That is a guard against
+picking the wrong file by accident, not a technical ceiling — the browser
+uploads straight to storage, so it is not bound by the 4.5 MB cap on what a
+Vercel function can receive. If you genuinely need more, the number in
+`src/lib/prototype-storage.ts` can just go up.

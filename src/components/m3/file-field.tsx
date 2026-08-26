@@ -5,28 +5,31 @@
  *
  * Material 3 has no file input component, and a browser's native one cannot be
  * restyled. The usual workaround applies: the real input is visually hidden but
- * still present and still focusable, and a styled row sits in front of it. The
- * input keeps its native keyboard behaviour and its name, so a plain form
- * submit still carries the file.
+ * still present and still focusable, and a styled row sits in front of it.
  *
- * It reports the chosen file's name and size, because "did it actually pick up
- * my file" is the main question this control has to answer.
+ * Two modes:
  *
- * Validation happens here, on selection, rather than on submit. That is not
- * just for speed: a browser will not let JavaScript put a file back into a file
- * input, so a form that round-trips to the server and comes back with an error
- * has silently lost the user's file and they have to find it again. Catching
- * the obvious problems -- too big, not the right kind of file -- at the moment
- * of choosing avoids that entirely. The server still re-checks everything.
+ *  - Give it a `name` and it behaves like a normal form field: the file is
+ *    serialised with the form on submit. Right for small files.
+ *  - Give it `onFileChange` and no `name` and the chosen File is handed to the
+ *    parent instead, and never serialised with the form. Right for anything
+ *    large, which needs to go straight to storage rather than through a server
+ *    action, and right whenever the selection has to survive a failed submit --
+ *    a browser will not let JavaScript put a file back into a file input, but
+ *    a File held in React state is unaffected.
+ *
+ * Validation happens on selection rather than on submit, so an obviously wrong
+ * file is caught before anything is sent anywhere.
  */
 
-import { useId, useRef, useState, type ChangeEvent } from "react";
+import { useId, useState, type ChangeEvent } from "react";
 
 import { formatBytes } from "@/components/m3/format";
 
 export interface FileFieldProps {
-  name: string;
   label: string;
+  /** Serialise with the form under this name. Omit when using onFileChange. */
+  name?: string;
   accept?: string;
   required?: boolean;
   supportingText?: string;
@@ -39,64 +42,76 @@ export interface FileFieldProps {
    * to tell an HTML document from something that merely got named ".html".
    */
   validateHead?: (head: string, file: File) => string | null;
+  /** Called with the accepted file, or null when cleared or rejected. */
+  onFileChange?: (file: File | null) => void;
+  /**
+   * The file to display. Pass this alongside onFileChange so the control still
+   * shows the selection after a failed submit has cleared the input itself.
+   */
+  value?: File | null;
 }
 
 export function FileField({
-  name,
   label,
+  name,
   accept,
   required = false,
   supportingText,
   error = false,
   maxBytes,
   validateHead,
+  onFileChange,
+  value,
 }: FileFieldProps) {
   const inputId = useId();
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [fileName, setFileName] = useState<string | null>(null);
-  const [fileSize, setFileSize] = useState<number | null>(null);
+  const [ownFile, setOwnFile] = useState<File | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
+
+  // The parent's file wins when it is managing the selection.
+  const file = onFileChange ? (value ?? null) : ownFile;
+
+  function accept_(next: File | null) {
+    setOwnFile(next);
+    setLocalError(null);
+    onFileChange?.(next);
+  }
 
   function reject(input: HTMLInputElement, message: string) {
     // Clearing the input stops a file we have already rejected from being
     // submitted anyway.
     input.value = "";
-    setFileName(null);
-    setFileSize(null);
+    setOwnFile(null);
     setLocalError(message);
+    onFileChange?.(null);
   }
 
   async function onChange(event: ChangeEvent<HTMLInputElement>) {
     const input = event.target;
-    const file = input.files?.[0];
+    const chosen = input.files?.[0];
 
-    if (!file) {
-      setFileName(null);
-      setFileSize(null);
-      setLocalError(null);
+    if (!chosen) {
+      accept_(null);
       return;
     }
 
-    if (maxBytes && file.size > maxBytes) {
+    if (maxBytes && chosen.size > maxBytes) {
       reject(
         input,
-        `That file is ${formatBytes(file.size)}. The limit is ${formatBytes(maxBytes)}.`,
+        `That file is ${formatBytes(chosen.size)}. The limit is ${formatBytes(maxBytes)}.`,
       );
       return;
     }
 
     if (validateHead) {
-      const head = await file.slice(0, 4096).text();
-      const problem = validateHead(head, file);
+      const head = await chosen.slice(0, 4096).text();
+      const problem = validateHead(head, chosen);
       if (problem) {
         reject(input, problem);
         return;
       }
     }
 
-    setFileName(file.name);
-    setFileSize(file.size);
-    setLocalError(null);
+    accept_(chosen);
   }
 
   const showError = error || Boolean(localError);
@@ -115,7 +130,6 @@ export function FileField({
         ].join(" ")}
       >
         <input
-          ref={inputRef}
           id={inputId}
           type="file"
           name={name}
@@ -136,12 +150,10 @@ export function FileField({
         <span className="min-w-0 flex-1">
           <span className="block text-body-small text-on-surface-variant">{label}</span>
           <span className="block truncate text-body-medium text-on-surface">
-            {fileName ? (
+            {file ? (
               <>
-                {fileName}
-                {fileSize !== null ? (
-                  <span className="text-on-surface-variant"> · {formatBytes(fileSize)}</span>
-                ) : null}
+                {file.name}
+                <span className="text-on-surface-variant"> · {formatBytes(file.size)}</span>
               </>
             ) : (
               <span className="text-on-surface-variant">No file chosen</span>

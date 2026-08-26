@@ -109,15 +109,23 @@ writing one-off styled elements, so later chunks stay consistent.
   cannot be fetched by URL at all. The only way to see it is through
   `/p/[versionId]`, which means the same-origin rule is enforced by the storage
   layer rather than by everyone remembering it.
-- A server action carries the upload, so it is bounded by Vercel's 4.5 MB limit
-  on a function's request body. `MAX_PROTOTYPE_BYTES` reflects that. If
-  prototypes outgrow it, switch to `@vercel/blob/client`, which uploads straight
-  from the browser.
-- Validate uploads on the client as well as the server. Not for speed: a browser
-  will not let JavaScript put a file back into a file input, so a form that
-  round-trips with an error has silently lost the user's file. React also resets
-  uncontrolled fields after a form action, which clears the password too. Catch
-  what you can at selection time; the server still re-checks everything.
+- **The browser uploads the file straight to Blob**, never through a server
+  action. A Vercel function may only receive a 4.5 MB request body, and real
+  prototypes go past that easily once images are inlined. `/api/prototype-upload`
+  issues a short-lived token scoped to one pathname, one content type and a size
+  cap. That route is NOT covered by middleware, so it checks the admin session
+  itself -- do not remove that check.
+- The blob URL then arrives at the server action as ordinary form data, which
+  means it is user input. The action verifies it three ways before writing
+  anything: `head` confirms the blob exists in our store, the pathname must
+  belong to the prototype id being claimed, and the opening bytes are read back
+  to confirm it is HTML. A rejected upload is deleted, so refused files do not
+  accumulate.
+- Validate uploads in the browser as well as on the server. Not for speed: a
+  browser will not let JavaScript put a file back into a file input, and React
+  resets uncontrolled fields after a form action. Anything large or long-lived
+  belongs in React state rather than in the input -- that is why the prototype
+  file input has no `name`.
 
 ## Build progress
 Built so far: chunks 1 (foundation) and 2 (upload and same-origin serving).

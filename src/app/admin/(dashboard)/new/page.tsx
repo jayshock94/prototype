@@ -3,7 +3,11 @@ import type { Metadata } from "next";
 import { Card } from "@/components/m3/card";
 import { ErrorIcon } from "@/components/m3/icons";
 import { hasBlobToken } from "@/lib/env";
-import { MAX_PROTOTYPE_BYTES } from "@/lib/prototype-storage";
+import {
+  MAX_KNOWLEDGE_BASE_BYTES,
+  MAX_PROTOTYPE_BYTES,
+  MULTIPART_THRESHOLD_BYTES,
+} from "@/lib/prototype-storage";
 import { NewPrototypeForm } from "./new-prototype-form";
 
 export const metadata: Metadata = { title: "New prototype · Admin" };
@@ -51,7 +55,13 @@ export default function NewPrototypePage() {
         </Card>
       ) : null}
 
-      <NewPrototypeForm maxBytes={MAX_PROTOTYPE_BYTES} />
+      {/* Limits are passed in from the server: the module that defines them
+          is server-only, because it also holds the Blob credentials. */}
+      <NewPrototypeForm
+        maxBytes={MAX_PROTOTYPE_BYTES}
+        multipartThreshold={MULTIPART_THRESHOLD_BYTES}
+        maxKnowledgeBaseBytes={MAX_KNOWLEDGE_BASE_BYTES}
+      />
     </div>
   );
 }

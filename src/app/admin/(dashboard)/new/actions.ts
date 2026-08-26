@@ -3,14 +3,21 @@
 /**
  * Creating a prototype.
  *
- * Runs entirely on the server: the reviewer password is hashed here and the
- * HTML goes straight to Blob storage without ever touching client JavaScript.
+ * By the time this runs the HTML is already in Blob storage: the browser
+ * uploaded it directly, using a token issued by /api/prototype-upload. What
+ * arrives here is the blob's URL, not the file, which is what keeps prototype
+ * size independent of Vercel's 4.5 MB limit on a function request body.
  *
- * Order of operations matters. The file is uploaded to Blob *before* any row is
- * written, so a failed upload leaves the database untouched rather than leaving
- * a prototype pointing at a file that does not exist. The two rows that follow
- * are written in a transaction, so a prototype can never exist without its
- * first version.
+ * That means the blob reference is user input and cannot be taken on trust. It
+ * is checked three ways before anything is written: `head` confirms the blob
+ * really exists in *our* store, the pathname must belong to the prototype id
+ * being claimed, and the first bytes are read back to confirm the file is
+ * actually HTML.
+ *
+ * The two rows are written in one transaction, so a prototype can never exist
+ * without its first version. If anything is rejected, the orphaned blob is
+ * deleted -- otherwise a refused upload would sit in the store forever with
+ * nothing pointing at it.
  */
 
 import { redirect } from "next/navigation";
@@ -20,9 +27,13 @@ import { getDb } from "@/db";
 import { prototype, version } from "@/db/schema";
 import { hashPassword } from "@/lib/password";
 import {
+  MAX_KNOWLEDGE_BASE_BYTES,
   MAX_PROTOTYPE_BYTES,
+  deletePrototypeBlob,
   formatBytes,
-  putPrototypeHtml,
+  headPrototypeBlob,
+  pathnameBelongsToPrototype,
+  readPrototypeHead,
 } from "@/lib/prototype-storage";
 import { looksLikeHtml } from "./looks-like-html";
 import { parseReviewerNames } from "./parse-reviewer-names";
@@ -35,6 +46,9 @@ export type NewPrototypeState = {
   values?: Record<string, string>;
 };
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function createPrototype(
   _previousState: NewPrototypeState,
   formData: FormData,
@@ -46,12 +60,27 @@ export async function createPrototype(
   const reviewerNamesRaw = String(formData.get("reviewerNames") ?? "");
   const knowledgeBaseText = String(formData.get("knowledgeBaseText") ?? "").trim();
 
-  const htmlFile = formData.get("html");
+  // Written by the browser after it uploads the file straight to Blob.
+  const prototypeId = String(formData.get("prototypeId") ?? "");
+  const htmlBlobUrl = String(formData.get("htmlBlobUrl") ?? "");
+
   const knowledgeBaseFile = formData.get("knowledgeBaseFile");
 
   // Echoed back on failure so nothing typed is lost. The password is
   // deliberately not echoed.
-  const values = { name, ticket, description, reviewerNames: reviewerNamesRaw, knowledgeBaseText };
+  const values = {
+    name,
+    ticket,
+    description,
+    reviewerNames: reviewerNamesRaw,
+    knowledgeBaseText,
+  };
+
+  /** Reject, and take the orphaned blob with us. */
+  async function reject(state: NewPrototypeState): Promise<NewPrototypeState> {
+    if (htmlBlobUrl) await deletePrototypeBlob(htmlBlobUrl);
+    return { ...state, values };
+  }
 
   const fieldErrors: Record<string, string> = {};
 
@@ -67,63 +96,74 @@ export async function createPrototype(
     fieldErrors.reviewerNames = "Add at least one reviewer name, one per line.";
   }
 
-  if (!(htmlFile instanceof File) || htmlFile.size === 0) {
+  if (!htmlBlobUrl || !prototypeId) {
     fieldErrors.html = "Choose the prototype's HTML file.";
-  } else if (htmlFile.size > MAX_PROTOTYPE_BYTES) {
-    fieldErrors.html = `That file is ${formatBytes(htmlFile.size)}. The limit is ${formatBytes(MAX_PROTOTYPE_BYTES)}.`;
   }
 
   if (Object.keys(fieldErrors).length > 0) {
-    return { fieldErrors, values };
+    return reject({ fieldErrors });
   }
 
-  const file = htmlFile as File;
-  const html = await file.text();
+  // --- The blob reference came from the browser, so verify all of it --------
 
-  if (!looksLikeHtml(html)) {
-    return {
+  if (!UUID_PATTERN.test(prototypeId)) {
+    return reject({ error: "That upload could not be verified. Please try again." });
+  }
+
+  const blob = await headPrototypeBlob(htmlBlobUrl);
+  if (!blob) {
+    return reject({
+      fieldErrors: {
+        html: "That upload could not be found in storage. Please choose the file again.",
+      },
+    });
+  }
+
+  if (!pathnameBelongsToPrototype(blob.pathname, prototypeId)) {
+    // The uploaded file is not where this prototype's file should be, which
+    // means the two were not created by the same request.
+    return reject({ error: "That upload could not be verified. Please try again." });
+  }
+
+  if (blob.size > MAX_PROTOTYPE_BYTES) {
+    return reject({
+      fieldErrors: {
+        html: `That file is ${formatBytes(blob.size)}. The limit is ${formatBytes(MAX_PROTOTYPE_BYTES)}.`,
+      },
+    });
+  }
+
+  // Read the opening bytes back out of storage. The browser checked this too,
+  // but a check that runs in the browser is a convenience, never a guarantee.
+  const head = await readPrototypeHead(htmlBlobUrl);
+  if (!looksLikeHtml(head)) {
+    return reject({
       fieldErrors: {
         html: "That does not look like an HTML file -- no <html> tag was found in it.",
       },
-      values,
-    };
+    });
   }
 
-  // A knowledge base file, when supplied, wins over the textarea.
+  // --- Knowledge base -------------------------------------------------------
+
+  // A knowledge base file, when supplied, wins over the textarea. Markdown is
+  // small, so unlike the prototype it can travel with the form.
   let knowledgeBase = knowledgeBaseText;
   if (knowledgeBaseFile instanceof File && knowledgeBaseFile.size > 0) {
-    if (knowledgeBaseFile.size > MAX_PROTOTYPE_BYTES) {
-      return {
-        fieldErrors: { knowledgeBaseFile: "That file is too large." },
-        values,
-      };
+    if (knowledgeBaseFile.size > MAX_KNOWLEDGE_BASE_BYTES) {
+      return reject({
+        fieldErrors: {
+          knowledgeBaseFile: `That file is ${formatBytes(knowledgeBaseFile.size)}. The limit is ${formatBytes(MAX_KNOWLEDGE_BASE_BYTES)}.`,
+        },
+      });
     }
     knowledgeBase = (await knowledgeBaseFile.text()).trim();
   }
 
+  // --- Write ----------------------------------------------------------------
+
   const db = getDb();
   const passwordHash = await hashPassword(password);
-
-  // The prototype id is needed for the Blob pathname, and the upload has to
-  // happen before any row is written, so the id is generated here rather than
-  // by the database.
-  const prototypeId = crypto.randomUUID();
-
-  let htmlBlobUrl: string;
-  try {
-    htmlBlobUrl = await putPrototypeHtml({
-      prototypeId,
-      versionLabel: "v1",
-      html,
-    });
-  } catch (error) {
-    return {
-      error:
-        "The file could not be uploaded to Blob storage. " +
-        (error instanceof Error ? error.message : String(error)),
-      values,
-    };
-  }
 
   try {
     await db.transaction(async (tx) => {
@@ -146,12 +186,11 @@ export async function createPrototype(
       });
     });
   } catch (error) {
-    return {
+    return reject({
       error:
         "The prototype could not be saved to the database. " +
         (error instanceof Error ? error.message : String(error)),
-      values,
-    };
+    });
   }
 
   revalidatePath("/admin");

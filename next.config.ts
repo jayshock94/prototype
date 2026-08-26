@@ -4,18 +4,16 @@ const nextConfig: NextConfig = {
   experimental: {
     serverActions: {
       /**
-       * Prototype HTML is uploaded through a server action, and the default
-       * limit for that is 1 MB -- easily exceeded by a self-contained file with
-       * images inlined as base64.
+       * Prototype HTML does NOT come through here -- the browser uploads it
+       * straight to Blob storage, and the server action receives only the
+       * resulting URL. See src/app/api/prototype-upload/route.ts.
        *
-       * 4.5 MB is the ceiling worth setting, because that is Vercel's own limit
-       * on a serverless function's request body. Raising this number further
-       * would not help: the platform would reject the request before our code
-       * ran. src/lib/prototype-storage.ts checks the size up front so an
-       * oversized file gets a clear message instead of a bare 413, and notes
-       * what to switch to if prototypes outgrow this.
+       * So this limit only has to cover the form's text fields plus an optional
+       * markdown knowledge base, which MAX_KNOWLEDGE_BASE_BYTES caps at 1 MB.
+       * 2 MB leaves room without inviting anything large back through a path
+       * that Vercel caps at 4.5 MB regardless.
        */
-      bodySizeLimit: "4.5mb",
+      bodySizeLimit: "2mb",
     },
   },
 };
