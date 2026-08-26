@@ -2,8 +2,29 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { AssistChip } from "@/components/m3/assist-chip";
 import { IconButton } from "@/components/m3/icon-button";
 import { ChevronRightIcon, SendIcon, SparkIcon } from "@/components/m3/icons";
+
+/**
+ * Starter questions shown before the reviewer has said anything.
+ *
+ * These exist because a blank input tells a reviewer nothing about what the
+ * assistant knows, and most people will not guess. Each one is a question the
+ * assistant can genuinely answer from the context it is given -- the
+ * prototype's description, its knowledge base, and the not-built list -- so a
+ * reviewer's first attempt gets a useful answer rather than "I don't know".
+ *
+ * EDIT THESE: they are deliberately generic so they suit any prototype. Keep
+ * them short enough to read at a glance, and only add ones the assistant can
+ * actually answer.
+ */
+const STARTER_QUESTIONS = [
+  "What is this prototype for?",
+  "What should I be checking?",
+  "What is not built yet?",
+  "Walk me through it",
+];
 
 export interface ChatMessage {
   id: string;
@@ -45,11 +66,11 @@ export function AssistantPanel({
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages]);
 
-  async function send() {
-    const text = draft.trim();
+  async function send(preset?: string) {
+    const text = (preset ?? draft).trim();
     if (!text || sending) return;
 
-    setDraft("");
+    if (!preset) setDraft("");
     setSending(true);
 
     const userMessage: ChatMessage = {
@@ -158,16 +179,50 @@ export function AssistantPanel({
                 ANTHROPIC_API_KEY and redeploy.
               </p>
             ) : messages.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center gap-3 px-2 text-center">
-                <span className="flex size-12 items-center justify-center rounded-full bg-surface-container-highest text-on-surface-variant">
-                  <SparkIcon />
-                </span>
-                <p className="text-title-small text-on-surface">
-                  Ask about this prototype
-                </p>
-                <p className="text-body-small text-on-surface-variant">
-                  It knows what this prototype is meant to do. It cannot see your
-                  screen yet, so say which part you mean.
+              <div className="flex flex-col gap-5 px-1 py-2">
+                <div className="flex flex-col gap-3">
+                  {/* Icon and title centred; the paragraph is not. Centred body
+                      text is hard to read at this width, and left-aligning it
+                      also lines it up with the chips below. */}
+                  <div className="flex flex-col items-center gap-3 text-center">
+                    <span className="flex size-12 items-center justify-center rounded-full bg-primary-container text-on-primary-container">
+                      <SparkIcon />
+                    </span>
+                    <p className="text-title-small text-on-surface">
+                      Ask about this prototype
+                    </p>
+                  </div>
+                  <p className="text-body-small text-on-surface-variant">
+                    It has been briefed on what this prototype is meant to do —
+                    what things are for, what is in scope, and what has
+                    deliberately been left out. Ask as you click around.
+                  </p>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <p className="text-label-medium text-on-surface-variant">
+                    Try asking
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {STARTER_QUESTIONS.map((question) => (
+                      <AssistChip
+                        key={question}
+                        disabled={sending}
+                        onClick={() => void send(question)}
+                      >
+                        {question}
+                      </AssistChip>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Said plainly, because a reviewer who assumes it can see the
+                    screen will ask "what does this button do?" and get a
+                    confusing answer. Chunk 6 removes this limitation. */}
+                <p className="rounded-md bg-surface-container-highest px-3 py-2 text-body-small text-on-surface-variant">
+                  It cannot see your screen yet, so name the screen or button you
+                  mean. It also cannot record feedback yet — note anything you
+                  find somewhere else for now.
                 </p>
               </div>
             ) : (
