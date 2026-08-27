@@ -37,6 +37,24 @@ import {
 /** A new version is either an iteration on the last one, or a parallel option. */
 export const versionTypeEnum = pgEnum("version_type", ["revision", "option"]);
 
+/**
+ * How hard the assistant pushes in a review. Set per prototype.
+ *
+ * These are not three different products -- "review" is the ordinary case and
+ * the other two are its edges. Browse answers questions and never interjects;
+ * verify works through the acceptance criteria and asks for a decision at the
+ * end. prompts/assistant.md is where the behaviour of each is written down.
+ *
+ * The reviewer's own intent still overrides this. Someone who opens a verify
+ * prototype just to look around gets browse behaviour, because running a
+ * checklist at them is how you lose the one person who bothered to come.
+ */
+export const assistantModeEnum = pgEnum("assistant_mode", [
+  "browse",
+  "review",
+  "verify",
+]);
+
 /** How the reviewer pointed at something. Chunks 6 and 7. */
 export const annotationKindEnum = pgEnum("annotation_kind", ["select", "point", "draw"]);
 
@@ -84,6 +102,12 @@ export const prototype = pgTable("prototype", {
   passwordHash: text("password_hash").notNull(),
   /** Names offered in the reviewer name picker. Postgres text[]. */
   reviewerNames: text("reviewer_names").array().notNull().default([]),
+  /**
+   * How the assistant behaves in this prototype's reviews. Defaults to
+   * "review", which is the ordinary case, so an existing prototype that has
+   * never been told behaves the way it always did.
+   */
+  mode: assistantModeEnum("mode").notNull().default("review"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -114,6 +138,12 @@ export const version = pgTable(
     htmlBlobUrl: text("html_blob_url").notNull(),
     /** The markdown that becomes the assistant's context. Chunk 4. */
     knowledgeBaseText: text("knowledge_base_text"),
+    /**
+     * The situation to put the reviewer in before they start: who they are
+     * pretending to be and what has just happened. Read out in the assistant's
+     * opening, and only when there is one -- most prototypes do not need it.
+     */
+    scenario: text("scenario"),
     type: versionTypeEnum("type").notNull().default("revision"),
     isCurrent: boolean("is_current").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -161,6 +191,8 @@ export const criterion = pgTable(
     versionId: uuid("version_id")
       .notNull()
       .references(() => version.id, { onDelete: "cascade" }),
+    /** Manual ordering, so criteria keep the order they were written in. */
+    sortOrder: integer("sort_order").notNull().default(0),
     /** The reference from the ticket, e.g. "AC3". */
     ref: text("ref"),
     text: text("text").notNull(),
@@ -184,6 +216,8 @@ export const notBuilt = pgTable(
     versionId: uuid("version_id")
       .notNull()
       .references(() => version.id, { onDelete: "cascade" }),
+    /** Manual ordering, so the list keeps the order it was written in. */
+    sortOrder: integer("sort_order").notNull().default(0),
     text: text("text").notNull(),
   },
   (table) => [index("not_built_version_id_idx").on(table.versionId)],

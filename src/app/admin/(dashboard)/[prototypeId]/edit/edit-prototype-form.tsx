@@ -21,12 +21,22 @@ import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Button, ButtonLink } from "@/components/m3/button";
+import { Select } from "@/components/m3/select";
 import { Card } from "@/components/m3/card";
 import { FileField } from "@/components/m3/file-field";
 import { ErrorIcon } from "@/components/m3/icons";
 import { TextArea } from "@/components/m3/text-area";
 import { TextField } from "@/components/m3/text-field";
+import {
+  ASSISTANT_MODES,
+  MODE_DESCRIPTIONS,
+  MODE_LABELS,
+  type AssistantMode,
+  type CriterionDraft,
+  type TaskDraft,
+} from "@/lib/briefing";
 import { updatePrototype, type EditPrototypeState } from "./actions";
+import { CriterionRows, TaskRows } from "./briefing-rows";
 
 export interface EditPrototypeInitialValues {
   name: string;
@@ -34,6 +44,16 @@ export interface EditPrototypeInitialValues {
   description: string;
   reviewerNames: string;
   knowledgeBaseText: string;
+  scenario: string;
+  /** One per line, the way the textarea holds it. */
+  notBuilt: string;
+}
+
+/** The parts of the briefing that are lists rather than text. */
+export interface EditPrototypeBriefing {
+  mode: AssistantMode;
+  tasks: TaskDraft[];
+  criteria: CriterionDraft[];
 }
 
 function SubmitButton() {
@@ -48,11 +68,13 @@ function SubmitButton() {
 export function EditPrototypeForm({
   prototypeId,
   initial,
+  briefing,
   maxKnowledgeBaseBytes,
   hasCurrentVersion,
 }: {
   prototypeId: string;
   initial: EditPrototypeInitialValues;
+  briefing: EditPrototypeBriefing;
   maxKnowledgeBaseBytes: number;
   /** False only if a prototype somehow has no version at all. */
   hasCurrentVersion: boolean;
@@ -168,6 +190,90 @@ export function EditPrototypeForm({
             fieldError("reviewerNames") ??
             "Removing a name only takes it out of the picker. Feedback already left under that name is kept."
           }
+        />
+      </section>
+
+      <section className="flex flex-col gap-6">
+        <div>
+          <h2 className="text-title-medium text-on-surface">How the review runs</h2>
+          <p className="text-body-small text-on-surface-variant">
+            The setting is yours, but the reviewer&rsquo;s intent still wins. Someone
+            who opens a Verify prototype just to look around gets left alone, and
+            comes back up a level if they start engaging.
+          </p>
+        </div>
+
+        <Select
+          id="mode"
+          name="mode"
+          label="Assistant mode"
+          defaultValue={briefing.mode}
+          error={Boolean(fieldError("mode"))}
+          supportingText={fieldError("mode") ?? MODE_DESCRIPTIONS[briefing.mode]}
+        >
+          {ASSISTANT_MODES.map((mode) => (
+            <option key={mode} value={mode}>
+              {MODE_LABELS[mode]}
+            </option>
+          ))}
+        </Select>
+
+        <TextArea
+          id="scenario"
+          name="scenario"
+          label="Scenario (optional)"
+          rows={3}
+          disabled={!hasCurrentVersion}
+          defaultValue={value("scenario")}
+          supportingText="The situation to put them in before they start: who they are pretending to be and what has just happened. Read out in the opening. Most prototypes do not need one."
+        />
+      </section>
+
+      <section className="flex flex-col gap-6">
+        <div>
+          <h2 className="text-title-medium text-on-surface">Tasks</h2>
+          <p className="text-body-small text-on-surface-variant">
+            What a reviewer is asked to try. This is the half of a review that
+            answers &ldquo;could a person actually do it&rdquo;. Offered once, never
+            forced, and skipped entirely in Browse.
+          </p>
+        </div>
+
+        <TaskRows initial={briefing.tasks} />
+      </section>
+
+      <section className="flex flex-col gap-6">
+        <div>
+          <h2 className="text-title-medium text-on-surface">Acceptance criteria</h2>
+          <p className="text-body-small text-on-surface-variant">
+            What the ticket promised. The other half of a review: does this do
+            what was asked. A reviewer&rsquo;s verdict on each one is kept, so
+            editing the wording here does not lose it.
+          </p>
+        </div>
+
+        <CriterionRows initial={briefing.criteria} />
+      </section>
+
+      <section className="flex flex-col gap-6">
+        <div>
+          <h2 className="text-title-medium text-on-surface">Not built</h2>
+          <p className="text-body-small text-on-surface-variant">
+            Anything deliberately missing or unwired, one per line. This is what
+            lets the assistant say &ldquo;that is out of scope&rdquo; instead of
+            inventing an answer, and it is the single most useful thing you can
+            write down here.
+          </p>
+        </div>
+
+        <TextArea
+          id="notBuilt"
+          name="notBuilt"
+          label="Not built, one per line"
+          rows={6}
+          disabled={!hasCurrentVersion}
+          defaultValue={value("notBuilt")}
+          supportingText="For example: the export button does nothing, search returns fixed results, nothing is saved between visits."
         />
       </section>
 

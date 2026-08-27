@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { count, desc, eq, sql } from "drizzle-orm";
+import { asc, count, desc, eq, sql } from "drizzle-orm";
 import { notFound } from "next/navigation";
 
 import { ButtonLink } from "@/components/m3/button";
@@ -7,7 +7,8 @@ import { CopyLink } from "@/components/m3/copy-link";
 import { Card } from "@/components/m3/card";
 import { EditIcon, FlagIcon, OpenInNewIcon } from "@/components/m3/icons";
 import { getDb } from "@/db";
-import { feedback, prototype, session, version } from "@/db/schema";
+import { MODE_DESCRIPTIONS, MODE_LABELS } from "@/lib/briefing";
+import { criterion, feedback, notBuilt, prototype, session, task, version } from "@/db/schema";
 
 export const metadata: Metadata = { title: "Prototype · Admin" };
 export const dynamic = "force-dynamic";
@@ -60,6 +61,33 @@ export default async function PrototypeDetailPage({
     .orderBy(desc(version.createdAt));
 
   const current = versions.find((v) => v.isCurrent) ?? versions[0];
+
+  // What the assistant has been briefed with on the current version. Counted
+  // rather than listed in full -- this page answers "is it set up?", and the
+  // edit form answers "set up how?".
+  const [tasks, criteria, notBuiltRows] = current
+    ? await Promise.all([
+        db
+          .select({ goal: task.goal })
+          .from(task)
+          .where(eq(task.versionId, current.id))
+          .orderBy(asc(task.sortOrder)),
+        db
+          .select({ ref: criterion.ref, text: criterion.text })
+          .from(criterion)
+          .where(eq(criterion.versionId, current.id))
+          .orderBy(asc(criterion.sortOrder)),
+        db
+          .select({ text: notBuilt.text })
+          .from(notBuilt)
+          .where(eq(notBuilt.versionId, current.id))
+          .orderBy(asc(notBuilt.sortOrder)),
+      ])
+    : [[], [], []];
+
+  const briefed =
+    tasks.length + criteria.length + notBuiltRows.length > 0 ||
+    Boolean(current?.scenario);
 
   // How much there is to read, and how much of it has not been triaged. The
   // untriaged number is the one that says whether this needs attention today.
@@ -120,6 +148,46 @@ export default async function PrototypeDetailPage({
           </p>
         </Card>
       ) : null}
+
+      <Card variant="outlined" className="p-6">
+        <dl className="grid gap-6 sm:grid-cols-2">
+          <Detail label="Assistant mode">
+            {MODE_LABELS[row.mode]}
+            <p className="mt-2 text-body-small text-on-surface-variant">
+              {MODE_DESCRIPTIONS[row.mode]}
+            </p>
+          </Detail>
+
+          <Detail label={`Briefing${current ? ` for ${current.label}` : ""}`}>
+            {briefed ? (
+              <ul className="flex flex-col gap-1 text-body-medium text-on-surface-variant">
+                <li>
+                  {tasks.length === 0
+                    ? "No tasks"
+                    : `${tasks.length} ${tasks.length === 1 ? "task" : "tasks"}`}
+                </li>
+                <li>
+                  {criteria.length === 0
+                    ? "No acceptance criteria"
+                    : `${criteria.length} acceptance ${criteria.length === 1 ? "criterion" : "criteria"}`}
+                </li>
+                <li>
+                  {notBuiltRows.length === 0
+                    ? "Nothing listed as not built"
+                    : `${notBuiltRows.length} thing${notBuiltRows.length === 1 ? "" : "s"} listed as not built`}
+                </li>
+                {current?.scenario ? <li>A scenario is set</li> : null}
+              </ul>
+            ) : (
+              <p className="text-body-medium text-on-surface-variant">
+                Nothing yet. The assistant can answer questions from the
+                knowledge base, but it has nothing to ask anyone to try and
+                cannot tell what is out of scope.
+              </p>
+            )}
+          </Detail>
+        </dl>
+      </Card>
 
       <Card variant="outlined" className="p-6">
         <dl className="grid gap-6 sm:grid-cols-2">

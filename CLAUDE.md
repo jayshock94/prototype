@@ -235,6 +235,7 @@ writing one-off styled elements, so later chunks stay consistent.
 - `src/lib/prototype-storage.ts`  Everything to do with Vercel Blob
 - `src/lib/env.ts`            Reads and validates environment variables
 - `src/lib/reviewer-names.ts` Parses the one-name-per-line reviewer textarea
+- `src/lib/briefing.ts`       Mode wording, and reading the briefing out of the edit form
 - `src/app/p/[versionId]/`    Serves prototype HTML on our own origin
 - `src/app/r/[prototypeId]/`  Reviewer entry, and the review page
 - `src/app/admin/(dashboard)/[prototypeId]/edit/`  Editing an existing prototype
@@ -295,6 +296,41 @@ Replacing the HTML is deliberately *not* here. That is a new version rather than
 an edit of this row, and it needs a label, a change note and a move of
 `is_current` -- there is a TODO in `edit/actions.ts` describing the shape.
 
+## The briefing
+
+What the assistant is told about a prototype, beyond its name and knowledge
+base. Authored at `/admin/[prototypeId]/edit`, assembled into the system prompt
+by `src/lib/assistant-context.ts`.
+
+- **Mode lives on the prototype, the rest on the version.** A tasks list and a
+  set of criteria describe one uploaded file, so an old version keeps the
+  briefing it was actually reviewed against -- the same rule the knowledge base
+  already followed. Mode is how you want reviews run, which is not a property of
+  a file.
+- **Tasks and criteria are independent and both optional.** Criteria with no
+  tasks is a design review; tasks with no criteria is a usability test; both is
+  the hybrid this application is for. An empty list is left out of the prompt
+  entirely rather than sent as an empty heading.
+- **The two lists are diffed on save, never replaced.** A reviewer's verdict
+  lives in `ac_result` and cascades when its criterion is deleted, so
+  delete-all-then-insert would throw away every acceptance result on a version
+  the moment you fixed a typo. Rows come back from the form carrying their id,
+  which is how a save can update in place. Tasks work the same way even though
+  nothing points at them yet, because something will after the next chunk.
+- **Row ids from the form are user input.** Every update is scoped to the
+  version being edited, so an id belonging to somewhere else matches nothing and
+  is written as a new row rather than hijacking another version's.
+- **`sort_order` is not decoration.** Without it Postgres may return the lists
+  in any order, and the form would reshuffle itself every time it was saved.
+- The "cannot be checked in a prototype" checkbox is the inverse of the column
+  it writes. The form asks the question the person filling it in is actually
+  asking, and unticked is the common case, so the common case needs no action.
+  The field is called `notVerifiable` so the inversion is visible where it
+  happens rather than hidden behind a name that means the opposite.
+- Repeatable rows key on a counter, never on the array index. Keying by index
+  is the classic bug here: delete the first of three rows and the remaining text
+  appears to jump between fields.
+
 ## Build progress
 Built so far: chunks 1 (foundation), 2 (upload and same-origin serving),
 3 (reviewer entry and prototype render), 4 (the assistant), 5 (feedback capture,
@@ -321,9 +357,8 @@ a blocker never reads like a nitpick.
 
 Remaining work, in dependency order:
 
-1. **The briefing.** Admin authoring for mode, scenario, tasks, acceptance
-   criteria and the not-built list. Nothing else can happen until the assistant
-   has something to be about.
+1. ~~**The briefing.**~~ Done. Mode, scenario, tasks, acceptance criteria and
+   the not-built list are authored in the edit form and reach the assistant.
 2. **The new voice.** The personality file, a role picker after the name step,
    and an opening message the assistant sends first.
 3. **Eyes.** Screen detection in the framed prototype, plus the path through it.

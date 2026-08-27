@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 
 import { getDb } from "@/db";
-import { prototype, version } from "@/db/schema";
+import { criterion, notBuilt, prototype, task, version } from "@/db/schema";
 import { MAX_KNOWLEDGE_BASE_BYTES } from "@/lib/prototype-storage";
 import { EditPrototypeForm } from "./edit-prototype-form";
 
@@ -37,16 +37,51 @@ export default async function EditPrototypePage({
 
   if (!row) notFound();
 
-  // The knowledge base is stored on the version, not the prototype, so the
-  // form needs whichever version is current.
+  // The briefing is stored on the version, not the prototype, so the form
+  // needs whichever version is current.
   const [current] = await db
     .select({
+      id: version.id,
       label: version.label,
       knowledgeBaseText: version.knowledgeBaseText,
+      scenario: version.scenario,
     })
     .from(version)
     .where(and(eq(version.prototypeId, prototypeId), eq(version.isCurrent, true)))
     .limit(1);
+
+  // Three small lists for one version. Fetched in parallel because they do not
+  // depend on each other, and ordered explicitly -- without sort_order Postgres
+  // is free to hand them back in any order, which would shuffle the form every
+  // time it was saved.
+  const [tasks, criteria, notBuiltRows] = current
+    ? await Promise.all([
+        db
+          .select({
+            id: task.id,
+            goal: task.goal,
+            successState: task.successState,
+          })
+          .from(task)
+          .where(eq(task.versionId, current.id))
+          .orderBy(asc(task.sortOrder)),
+        db
+          .select({
+            id: criterion.id,
+            ref: criterion.ref,
+            text: criterion.text,
+            verifiableInPrototype: criterion.verifiableInPrototype,
+          })
+          .from(criterion)
+          .where(eq(criterion.versionId, current.id))
+          .orderBy(asc(criterion.sortOrder)),
+        db
+          .select({ text: notBuilt.text })
+          .from(notBuilt)
+          .where(eq(notBuilt.versionId, current.id))
+          .orderBy(asc(notBuilt.sortOrder)),
+      ])
+    : [[], [], []];
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-8">
@@ -64,6 +99,20 @@ export default async function EditPrototypePage({
         prototypeId={prototypeId}
         hasCurrentVersion={Boolean(current)}
         maxKnowledgeBaseBytes={MAX_KNOWLEDGE_BASE_BYTES}
+        briefing={{
+          mode: row.mode,
+          tasks: tasks.map((t) => ({
+            id: t.id,
+            goal: t.goal,
+            successState: t.successState ?? "",
+          })),
+          criteria: criteria.map((c) => ({
+            id: c.id,
+            ref: c.ref ?? "",
+            text: c.text,
+            verifiableInPrototype: c.verifiableInPrototype,
+          })),
+        }}
         initial={{
           name: row.name,
           ticket: row.ticket ?? "",
@@ -73,6 +122,8 @@ export default async function EditPrototypePage({
           // makes.
           reviewerNames: row.reviewerNames.join("\n"),
           knowledgeBaseText: current?.knowledgeBaseText ?? "",
+          scenario: current?.scenario ?? "",
+          notBuilt: notBuiltRows.map((n) => n.text).join("\n"),
         }}
       />
     </div>

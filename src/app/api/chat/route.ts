@@ -12,12 +12,21 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { getDb } from "@/db";
-import { feedback, message, notBuilt, prototype, session, version } from "@/db/schema";
+import {
+  criterion,
+  feedback,
+  message,
+  notBuilt,
+  prototype,
+  session,
+  task,
+  version,
+} from "@/db/schema";
 import { buildSystemPrompt } from "@/lib/assistant-context";
 import { anthropicApiKey, hasAnthropicApiKey } from "@/lib/env";
 import {
@@ -128,8 +137,10 @@ export async function POST(request: Request) {
       versionId: version.id,
       versionLabel: version.label,
       knowledgeBaseText: version.knowledgeBaseText,
+      scenario: version.scenario,
       name: prototype.name,
       description: prototype.description,
+      mode: prototype.mode,
     })
     .from(session)
     .innerJoin(version, eq(version.id, session.versionId))
@@ -143,10 +154,31 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No review session." }, { status: 401 });
   }
 
-  const notBuiltRows = await db
-    .select({ text: notBuilt.text })
-    .from(notBuilt)
-    .where(eq(notBuilt.versionId, context.versionId));
+  // The briefing for this version: what is deliberately missing, what the
+  // reviewer can be asked to try, and what the ticket promised. Fetched
+  // together because none of them depends on the others, and ordered by
+  // sort_order so the assistant sees them in the order they were written.
+  const [notBuiltRows, taskRows, criterionRows] = await Promise.all([
+    db
+      .select({ text: notBuilt.text })
+      .from(notBuilt)
+      .where(eq(notBuilt.versionId, context.versionId))
+      .orderBy(asc(notBuilt.sortOrder)),
+    db
+      .select({ goal: task.goal, successState: task.successState })
+      .from(task)
+      .where(eq(task.versionId, context.versionId))
+      .orderBy(asc(task.sortOrder)),
+    db
+      .select({
+        ref: criterion.ref,
+        text: criterion.text,
+        verifiableInPrototype: criterion.verifiableInPrototype,
+      })
+      .from(criterion)
+      .where(eq(criterion.versionId, context.versionId))
+      .orderBy(asc(criterion.sortOrder)),
+  ]);
 
   // Everything already recorded this visit. This goes into the system prompt
   // so Claude does not log the same complaint twice when a reviewer circles
@@ -169,6 +201,10 @@ export async function POST(request: Request) {
     versionLabel: context.versionLabel,
     knowledgeBaseText: context.knowledgeBaseText,
     notBuilt: notBuiltRows.map((r) => r.text),
+    mode: context.mode,
+    scenario: context.scenario,
+    tasks: taskRows,
+    criteria: criterionRows,
     recorded: alreadyRecorded.map((r) => ({
       severity: r.severity,
       screenId: r.screenId,
