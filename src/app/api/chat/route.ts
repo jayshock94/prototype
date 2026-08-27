@@ -281,6 +281,17 @@ export async function POST(request: Request) {
         ];
 
         for (let round = 0; ; round += 1) {
+          // A turn that recorded something comes back for a second round and
+          // keeps talking. Live, the panel has already started a fresh bubble
+          // under the receipt -- but the transcript stores the whole turn as
+          // one row, and without this the two halves are saved run together
+          // ("That should not happen.Logged as a blocker."). Added to the
+          // stored reply only, never emitted, so what the reviewer sees while
+          // it streams does not change.
+          if (round > 0 && reply && !reply.endsWith("\n")) {
+            reply += "\n\n";
+          }
+
           const claude = client.messages.stream({
             model: "claude-opus-5",
             max_tokens: MAX_REPLY_TOKENS,

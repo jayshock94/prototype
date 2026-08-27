@@ -169,6 +169,37 @@ writing one-off styled elements, so later chunks stay consistent.
   clears it, because a reviewer always remembers a fourth thing right after
   pressing finish and a dead end there pushes them back to email.
 
+## Handing feedback over
+
+- Finishing a review offers a **download**, and that is the point of the finish
+  screen rather than an afterthought on it. A reviewer who screenshots things
+  on their own has to write the description, remember what they expected, and
+  organise it before sending anything; the download is the same work already
+  done. If it is not the loudest thing on that screen they fall back to the
+  habit it replaces.
+- `/api/review/export` returns a zip holding `feedback.html` and `feedback.md`
+  -- two files because there are two ways it actually gets sent. The HTML is
+  for attaching and prints to PDF from any browser; the Markdown is for pasting
+  into a ticket or a chat window, where an attachment is one click too many.
+  `?format=md` returns just the text, which is what the copy button uses.
+- The report carries the three things a screenshot cannot: structure (severity,
+  screen, expected against happened), the conversation, and provenance (which
+  prototype, which version, who, when).
+- **It has no screenshots yet.** Capturing the framed document is chunk 7. The
+  archive shape already allows for a `screenshots/` folder, so adding them
+  later changes the report template and nothing else.
+- The HTML is deliberately self-contained and light-only: inline CSS, system
+  fonts, no network requests, because it has to open as an email attachment on
+  a laptop with no connection. It is a document for printing, not a page that
+  should follow the reader's theme.
+- `src/lib/zip.ts` is a hand-written ZIP writer, not a dependency, because this
+  needs the smallest corner of the format. Its limits (no ZIP64, ASCII names)
+  are documented at the top and hold for a feedback export. Its output is
+  checked against the system `unzip` in the tests rather than against itself.
+- The download does **not** replace the admin area. Feedback is saved either
+  way, so a reviewer who closes the tab without downloading has still been
+  heard -- the file is a copy to send, not the only channel.
+
 ## Admin review
 
 - `/admin/[prototypeId]/feedback` lists everything across all sessions, grouped
@@ -195,6 +226,8 @@ writing one-off styled elements, so later chunks stay consistent.
 - `src/lib/assistant-context.ts`  Builds the assistant's system prompt
 - `src/lib/feedback.ts`       Severity and disposition wording, shared everywhere
 - `src/lib/feedback-tool.ts`  The `record_feedback` tool Claude is given
+- `src/lib/export-report.ts`  Builds the reviewer's HTML and Markdown report
+- `src/lib/zip.ts`            Minimal ZIP writer, no dependency
 - `src/lib/reviewer-session.ts`   "Which review session is this, and is it allowed?"
 - `prompts/assistant.md`      The global assistant instructions, hand-edited
 - `src/lib/signing.ts`        HMAC signing shared by both

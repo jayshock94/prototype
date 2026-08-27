@@ -3,12 +3,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AssistChip } from "@/components/m3/assist-chip";
-import { Button } from "@/components/m3/button";
+import { Button, ButtonLink } from "@/components/m3/button";
 import { IconButton } from "@/components/m3/icon-button";
 import {
   CheckIcon,
   ChevronRightIcon,
   DeleteIcon,
+  DownloadIcon,
   ExpandMoreIcon,
   FlagIcon,
   SendIcon,
@@ -353,6 +354,7 @@ export function AssistantPanel({
       {open ? (
         completed ? (
           <ReviewSummary
+            prototypeId={prototypeId}
             items={recorded}
             onReopen={() => void setFinished(false)}
           />
@@ -653,22 +655,57 @@ function LoggedStrip({
 /**
  * What the reviewer sees after pressing finish.
  *
- * A count by severity and then everything captured, so the last thing they see
- * is the thing the designer is going to read. If it does not match what they
- * think they said, this is the moment they will notice -- which is why
- * reopening is offered rather than treating finish as a one-way door.
+ * Two jobs. First, show them what was captured, because if it does not match
+ * what they think they said this is the moment they will notice -- which is
+ * why reopening is offered rather than treating finish as a one-way door.
+ *
+ * Second, hand them the file. A reviewer who screenshots things on their own
+ * has to write the description, remember what they expected, and organise it
+ * before sending anything; the download is the same work already done. It has
+ * to be the loudest thing on this screen or they will fall back to the habit
+ * it replaces.
  */
 function ReviewSummary({
+  prototypeId,
   items,
   onReopen,
 }: {
+  prototypeId: string;
   items: FeedbackItem[];
   onReopen: () => void;
 }) {
+  const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+
   const counts = SEVERITIES.map((severity) => ({
     severity,
     count: items.filter((i) => i.severity === severity).length,
   })).filter((row) => row.count > 0);
+
+  /**
+   * Copy the same report as plain text.
+   *
+   * The archive is for attaching; this is for the other half of how things
+   * actually get sent -- pasted into a ticket or a chat window, where an
+   * attachment is one click too many and often goes unopened.
+   */
+  async function copyAsText() {
+    setCopyFailed(false);
+    try {
+      const response = await fetch(
+        `/api/review/export?prototypeId=${prototypeId}&format=md`,
+      );
+      if (!response.ok) throw new Error("export failed");
+      await navigator.clipboard.writeText(await response.text());
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2500);
+    } catch {
+      // Clipboard access is refused outright in some browsers and locked-down
+      // corporate profiles. Say so rather than looking like nothing happened
+      // -- the download is right above and still works.
+      setCopyFailed(true);
+    }
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -681,12 +718,45 @@ function ReviewSummary({
           <p className="text-body-small text-on-surface-variant">
             {items.length === 0
               ? "You did not log anything. That is a result too — it means nothing got in your way."
-              : `${items.length} ${items.length === 1 ? "item is" : "items are"} on their way to the designer. Nothing else to do.`}
+              : `${items.length} ${items.length === 1 ? "finding is" : "findings are"} saved. Download a copy to send on however you like.`}
           </p>
         </div>
 
+        {items.length > 0 ? (
+          <div className="mt-5 flex flex-col gap-2">
+            <ButtonLink
+              href={`/api/review/export?prototypeId=${prototypeId}`}
+              variant="filled"
+              fullWidth
+              icon={<DownloadIcon className="size-[18px]" />}
+            >
+              Download my feedback
+            </ButtonLink>
+
+            <Button variant="text" fullWidth onClick={() => void copyAsText()}>
+              {copied ? "Copied" : "Copy as text instead"}
+            </Button>
+
+            {copyFailed ? (
+              <p className="text-body-small text-error" role="alert">
+                Your browser would not let us reach the clipboard. Use the
+                download above.
+              </p>
+            ) : null}
+
+            {/* Said plainly, because "what is in this file and what do I do
+                with it" is the question that decides whether they send it or
+                go back to taking screenshots. */}
+            <p className="mt-1 text-body-small text-on-surface-variant">
+              A zip with two files: one opens in a browser and prints to PDF,
+              the other pastes into a ticket or a message. Both carry every
+              finding plus the whole conversation.
+            </p>
+          </div>
+        ) : null}
+
         {counts.length > 0 ? (
-          <ul className="mt-5 flex flex-wrap justify-center gap-2">
+          <ul className="mt-6 flex flex-wrap justify-center gap-2">
             {counts.map(({ severity, count }) => (
               <li key={severity}>
                 <SeverityBadge severity={severity} />
@@ -699,7 +769,7 @@ function ReviewSummary({
         ) : null}
 
         {items.length > 0 ? (
-          <ul className="mt-6 flex flex-col gap-2">
+          <ul className="mt-4 flex flex-col gap-2">
             {items.map((item) => (
               <li
                 key={item.id}
