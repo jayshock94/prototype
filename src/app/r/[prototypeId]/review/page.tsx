@@ -105,36 +105,35 @@ export default async function ReviewPage({
   if (!visit) redirect(`/r/${prototypeId}`);
 
   /*
-   * With no assistant, the reviewer needs the briefing on screen: there is
-   * nobody to ask what this review is about. Only fetched in that mode, since
-   * otherwise the assistant already has it in its prompt and putting it on
-   * screen as well would just be clutter.
+   * The briefing, for both panels but used differently. With no assistant the
+   * reviewer reads it on screen, because there is nobody to ask what this
+   * review is about. With one, only the counts matter here: the assistant
+   * already has the detail in its prompt, and the panel just needs to know
+   * whether to offer "what am I meant to try?" as a starter.
    */
   const assistantOff = isAssistantOff(row.mode);
 
-  const [briefTasks, briefCriteria, briefNotBuilt] = assistantOff
-    ? await Promise.all([
-        db
-          .select({ goal: task.goal, successState: task.successState })
-          .from(task)
-          .where(eq(task.versionId, row.versionId))
-          .orderBy(asc(task.sortOrder)),
-        db
-          .select({
-            ref: criterion.ref,
-            text: criterion.text,
-            verifiableInPrototype: criterion.verifiableInPrototype,
-          })
-          .from(criterion)
-          .where(eq(criterion.versionId, row.versionId))
-          .orderBy(asc(criterion.sortOrder)),
-        db
-          .select({ text: notBuilt.text })
-          .from(notBuilt)
-          .where(eq(notBuilt.versionId, row.versionId))
-          .orderBy(asc(notBuilt.sortOrder)),
-      ])
-    : [[], [], []];
+  const [briefTasks, briefCriteria, briefNotBuilt] = await Promise.all([
+    db
+      .select({ goal: task.goal, successState: task.successState })
+      .from(task)
+      .where(eq(task.versionId, row.versionId))
+      .orderBy(asc(task.sortOrder)),
+    db
+      .select({
+        ref: criterion.ref,
+        text: criterion.text,
+        verifiableInPrototype: criterion.verifiableInPrototype,
+      })
+      .from(criterion)
+      .where(eq(criterion.versionId, row.versionId))
+      .orderBy(asc(criterion.sortOrder)),
+    db
+      .select({ text: notBuilt.text })
+      .from(notBuilt)
+      .where(eq(notBuilt.versionId, row.versionId))
+      .orderBy(asc(notBuilt.sortOrder)),
+  ]);
 
   // Reload the conversation so a reviewer who refreshes, or comes back to the
   // tab, does not find an empty panel and wonder if it was lost.
@@ -264,6 +263,8 @@ export default async function ReviewPage({
             initialTimeline={timeline}
             initiallyCompleted={visit.completedAt !== null}
             configured={hasAnthropicApiKey()}
+            hasTasks={briefTasks.length > 0}
+            hasCriteria={briefCriteria.length > 0}
           />
         )}
       </div>

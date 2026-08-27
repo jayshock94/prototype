@@ -381,8 +381,15 @@ so a change needs a redeploy.
   the reviewer waiting for something that never happens. When a later chunk
   lands, lines move from the "cannot yet" list to the "can" list and the prompt
   is right the same day.
+- **Starter chips sit above the composer, not in an empty state.** Since the
+  assistant speaks first there is no empty state to put them in -- the panel
+  asks for an opening the moment it loads, so the conversation is never empty.
+  They are built from what the version actually has, because offering "what am
+  I meant to try?" on a prototype with no tasks earns a shrug, and they clear
+  once the reviewer has said something of their own.
 - **The assistant speaks first.** The panel asks for an opening when it loads
-  into an empty conversation. There is no reviewer message to answer, so the
+  into an empty conversation, unless there is no API key -- then it shows the
+  empty state rather than greeting the reviewer with a failed request. There is no reviewer message to answer, so the
   model is given a stage direction that is never persisted and never shown --
   the transcript starts with the assistant talking, which is the point. The
   server refuses a second opening once anything has been said, so a reload

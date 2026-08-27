@@ -37,16 +37,31 @@ import { ReviewSummary } from "./review-summary";
  * prototype's description, its knowledge base, and the not-built list -- so a
  * reviewer's first attempt gets a useful answer rather than "I don't know".
  *
- * EDIT THESE: they are deliberately generic so they suit any prototype. Keep
- * them short enough to read at a glance, and only add ones the assistant can
- * actually answer.
+ * Built from what this prototype actually has, not a fixed list. Offering
+ * "what am I meant to try?" on a prototype with no tasks earns a shrug, and a
+ * suggestion the assistant cannot answer is worse than no suggestion.
+ *
+ * They sit above the composer rather than in an empty state, because since the
+ * assistant speaks first there is no empty state to put them in -- the panel
+ * asks for an opening the moment it loads. They disappear once the reviewer has
+ * said something of their own: a starter has done its job by then, and a
+ * permanent block of suggestions in a panel this narrow is just clutter.
  */
-const STARTER_QUESTIONS = [
-  "What is this prototype for?",
-  "What should I be checking?",
-  "What is not built yet?",
-  "Walk me through it",
-];
+function starterQuestions({
+  hasTasks,
+  hasCriteria,
+}: {
+  hasTasks: boolean;
+  hasCriteria: boolean;
+}): string[] {
+  return [
+    "Walk me through it",
+    hasTasks ? "What am I meant to try?" : null,
+    hasCriteria ? "What should I check?" : null,
+    !hasTasks && !hasCriteria ? "What should I be looking at?" : null,
+    "What is not built yet?",
+  ].filter((q): q is string => q !== null);
+}
 
 /**
  * One thing in the panel's scrolling area.
@@ -89,6 +104,8 @@ export function AssistantPanel({
   initialTimeline,
   initiallyCompleted,
   configured,
+  hasTasks,
+  hasCriteria,
 }: {
   prototypeId: string;
   initialTimeline: TimelineEntry[];
@@ -96,6 +113,10 @@ export function AssistantPanel({
   initiallyCompleted: boolean;
   /** False when ANTHROPIC_API_KEY is missing on the server. */
   configured: boolean;
+  /** Whether this version has tasks, so a chip can offer to name them. */
+  hasTasks: boolean;
+  /** Whether it has acceptance criteria, for the same reason. */
+  hasCriteria: boolean;
 }) {
   const [open, setOpen] = useState(true);
   const [timeline, setTimeline] = useState<TimelineEntry[]>(initialTimeline);
@@ -110,6 +131,20 @@ export function AssistantPanel({
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   /** The recorded items, in the order they were logged. */
+  /*
+   * Has the reviewer said anything of their own? The assistant's opening is a
+   * message too, so counting messages would hide the chips before they were
+   * ever offered.
+   */
+  const said = timeline.some(
+    (entry) => entry.kind === "message" && entry.role === "user",
+  );
+
+  const starters = useMemo(
+    () => starterQuestions({ hasTasks, hasCriteria }),
+    [hasTasks, hasCriteria],
+  );
+
   const recorded = useMemo(
     () =>
       timeline.flatMap((entry) => (entry.kind === "feedback" ? [entry.item] : [])),
@@ -162,6 +197,10 @@ export function AssistantPanel({
   useEffect(() => {
     if (openingAsked.current) return;
     if (initialTimeline.length > 0) return;
+    // With no API key the request would fail, so the reviewer would arrive to
+    // an error bubble instead of a greeting. The empty state explains the
+    // situation properly.
+    if (!configured) return;
     openingAsked.current = true;
     void send(undefined, { opening: true });
     // Deliberately runs once on mount. send is recreated every render and
@@ -475,11 +514,7 @@ export function AssistantPanel({
               className="flex-1 overflow-y-auto px-4 py-4 max-lg:max-h-[45dvh]"
             >
               {!hasConversation && recorded.length === 0 ? (
-                <EmptyState
-                  configured={configured}
-                  sending={sending}
-                  onAsk={(q) => void send(q)}
-                />
+                <EmptyState configured={configured} />
               ) : (
                 <ul className="flex flex-col gap-3">
                   {timeline.map((entry) =>
@@ -542,6 +577,27 @@ export function AssistantPanel({
               onDelete={(id) => void remove(id)}
               onFinish={() => void setFinished(true)}
             />
+
+            {/*
+              Offered until the reviewer says something of their own. The
+              assistant's opening ends on a question, so these read as answers
+              to it rather than as a menu.
+            */}
+            {configured && !logging && !said ? (
+              <div className="shrink-0 border-t border-outline-variant px-3 pt-3">
+                <div className="flex flex-wrap gap-2">
+                  {starters.map((question) => (
+                    <AssistChip
+                      key={question}
+                      disabled={sending}
+                      onClick={() => void send(question)}
+                    >
+                      {question}
+                    </AssistChip>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             <div className="shrink-0 border-t border-outline-variant p-3">
               {logging ? (
@@ -610,15 +666,7 @@ export function AssistantPanel({
  * other feedback tool they have used made them fill something in -- so it is
  * stated outright rather than left to be discovered.
  */
-function EmptyState({
-  configured,
-  sending,
-  onAsk,
-}: {
-  configured: boolean;
-  sending: boolean;
-  onAsk: (question: string) => void;
-}) {
+function EmptyState({ configured }: { configured: boolean }) {
   return (
     <div className="flex flex-col gap-5 px-1 py-2">
       {!configured ? (
@@ -655,23 +703,6 @@ function EmptyState({
           delete.
         </p>
       </div>
-
-      {configured ? (
-        <div className="flex flex-col gap-2">
-          <p className="text-label-medium text-on-surface-variant">Try asking</p>
-          <div className="flex flex-wrap gap-2">
-            {STARTER_QUESTIONS.map((question) => (
-              <AssistChip
-                key={question}
-                disabled={sending}
-                onClick={() => onAsk(question)}
-              >
-                {question}
-              </AssistChip>
-            ))}
-          </div>
-        </div>
-      ) : null}
 
       {/* Said plainly, because a reviewer who assumes it can see the screen
           will ask "what does this button do?" and get a confusing answer.
