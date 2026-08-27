@@ -38,18 +38,25 @@ import {
 export const versionTypeEnum = pgEnum("version_type", ["revision", "option"]);
 
 /**
- * How hard the assistant pushes in a review. Set per prototype.
+ * How the assistant behaves in a review. Set per prototype.
  *
- * These are not three different products -- "review" is the ordinary case and
- * the other two are its edges. Browse answers questions and never interjects;
- * verify works through the acceptance criteria and asks for a decision at the
- * end. prompts/assistant.md is where the behaviour of each is written down.
+ * Three of these are degrees of the same thing -- "review" is the ordinary
+ * case, browse answers questions and never interjects, verify works through the
+ * acceptance criteria and asks for a decision at the end. prompts/assistant.md
+ * is where the behaviour of each is written down.
+ *
+ * "off" is not a degree of anything. There is no assistant at all: the reviewer
+ * gets the brief and a form, and no request is ever made to Anthropic. It lives
+ * in the same field because "how does the assistant behave here" is the
+ * question a person is asking when they reach for this setting, and "it does
+ * not" is a real answer to it.
  *
  * The reviewer's own intent still overrides this. Someone who opens a verify
  * prototype just to look around gets browse behaviour, because running a
  * checklist at them is how you lose the one person who bothered to come.
  */
 export const assistantModeEnum = pgEnum("assistant_mode", [
+  "off",
   "browse",
   "review",
   "verify",

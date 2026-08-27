@@ -7,6 +7,7 @@ import { Card } from "@/components/m3/card";
 import { LockIcon } from "@/components/m3/icons";
 import { getDb } from "@/db";
 import { prototype, version } from "@/db/schema";
+import { isAssistantOff } from "@/lib/briefing";
 import { hasValidPass, passCookieName } from "@/lib/reviewer-auth";
 import { NameForm } from "./name-form";
 import { PasswordForm } from "./password-form";
@@ -49,6 +50,7 @@ export default async function ReviewerEntryPage({
       name: prototype.name,
       description: prototype.description,
       reviewerNames: prototype.reviewerNames,
+      mode: prototype.mode,
     })
     .from(prototype)
     .where(eq(prototype.id, prototypeId))
@@ -89,7 +91,14 @@ export default async function ReviewerEntryPage({
         </div>
 
         {passed ? (
-          <NameForm prototypeId={row.id} reviewerNames={row.reviewerNames} />
+          <NameForm
+            prototypeId={row.id}
+            reviewerNames={row.reviewerNames}
+            /* Role only steers what the assistant asks about, and nothing else
+               reads it, so with no assistant it would be a question whose
+               answer reaches nobody. The action defaults it to "other". */
+            askRole={!isAssistantOff(row.mode)}
+          />
         ) : (
           <PasswordForm prototypeId={row.id} />
         )}

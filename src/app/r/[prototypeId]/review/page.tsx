@@ -4,15 +4,26 @@ import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 
 import { getDb } from "@/db";
-import { feedback, message, prototype, session, version } from "@/db/schema";
+import {
+  criterion,
+  feedback,
+  message,
+  notBuilt,
+  prototype,
+  session,
+  task,
+  version,
+} from "@/db/schema";
 import {
   hasValidPass,
   passCookieName,
   readSessionId,
   sessionCookieName,
 } from "@/lib/reviewer-auth";
+import { isAssistantOff } from "@/lib/briefing";
 import { hasAnthropicApiKey } from "@/lib/env";
 import { AssistantPanel, type TimelineEntry } from "./assistant-panel";
+import { FeedbackPanel } from "./feedback-panel";
 
 export const metadata: Metadata = {
   title: "Review",
@@ -63,9 +74,11 @@ export default async function ReviewPage({
     .select({
       name: prototype.name,
       ticket: prototype.ticket,
+      mode: prototype.mode,
       versionId: version.id,
       label: version.label,
       changedNote: version.changedNote,
+      scenario: version.scenario,
     })
     .from(prototype)
     .innerJoin(
@@ -90,6 +103,38 @@ export default async function ReviewPage({
     .limit(1);
 
   if (!visit) redirect(`/r/${prototypeId}`);
+
+  /*
+   * With no assistant, the reviewer needs the briefing on screen: there is
+   * nobody to ask what this review is about. Only fetched in that mode, since
+   * otherwise the assistant already has it in its prompt and putting it on
+   * screen as well would just be clutter.
+   */
+  const assistantOff = isAssistantOff(row.mode);
+
+  const [briefTasks, briefCriteria, briefNotBuilt] = assistantOff
+    ? await Promise.all([
+        db
+          .select({ goal: task.goal, successState: task.successState })
+          .from(task)
+          .where(eq(task.versionId, row.versionId))
+          .orderBy(asc(task.sortOrder)),
+        db
+          .select({
+            ref: criterion.ref,
+            text: criterion.text,
+            verifiableInPrototype: criterion.verifiableInPrototype,
+          })
+          .from(criterion)
+          .where(eq(criterion.versionId, row.versionId))
+          .orderBy(asc(criterion.sortOrder)),
+        db
+          .select({ text: notBuilt.text })
+          .from(notBuilt)
+          .where(eq(notBuilt.versionId, row.versionId))
+          .orderBy(asc(notBuilt.sortOrder)),
+      ])
+    : [[], [], []];
 
   // Reload the conversation so a reviewer who refreshes, or comes back to the
   // tab, does not find an empty panel and wonder if it was lost.
@@ -196,12 +241,31 @@ export default async function ReviewPage({
           />
         </div>
 
-        <AssistantPanel
-          prototypeId={prototypeId}
-          initialTimeline={timeline}
-          initiallyCompleted={visit.completedAt !== null}
-          configured={hasAnthropicApiKey()}
-        />
+        {assistantOff ? (
+          <FeedbackPanel
+            prototypeId={prototypeId}
+            scenario={row.scenario}
+            tasks={briefTasks}
+            criteria={briefCriteria}
+            notBuilt={briefNotBuilt.map((n) => n.text)}
+            initialItems={logged.map((item) => ({
+              id: item.id,
+              screenId: item.screenId,
+              expected: item.expected,
+              happened: item.happened,
+              note: item.note,
+              severity: item.severity,
+            }))}
+            initiallyCompleted={visit.completedAt !== null}
+          />
+        ) : (
+          <AssistantPanel
+            prototypeId={prototypeId}
+            initialTimeline={timeline}
+            initiallyCompleted={visit.completedAt !== null}
+            configured={hasAnthropicApiKey()}
+          />
+        )}
       </div>
     </div>
   );

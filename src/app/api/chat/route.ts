@@ -28,6 +28,7 @@ import {
   version,
 } from "@/db/schema";
 import { buildSystemPrompt } from "@/lib/assistant-context";
+import { isAssistantOff } from "@/lib/briefing";
 import { anthropicApiKey, hasAnthropicApiKey } from "@/lib/env";
 import {
   cleanField,
@@ -165,6 +166,21 @@ export async function POST(request: Request) {
   // session is not a way into their conversation.
   if (!context) {
     return NextResponse.json({ error: "No review session." }, { status: 401 });
+  }
+
+  /*
+   * A prototype with the assistant off has no assistant, and that has to be
+   * true here rather than only in the panel. The reviewer is served a form
+   * instead of a chat, so nothing in the browser would call this -- but a route
+   * that can be called directly has to enforce the setting itself, or "no
+   * requests are ever made to Anthropic" is a claim about the UI rather than
+   * about the application.
+   */
+  if (isAssistantOff(context.mode)) {
+    return NextResponse.json(
+      { error: "This prototype has no assistant." },
+      { status: 404 },
+    );
   }
 
   // The briefing for this version: what is deliberately missing, what the

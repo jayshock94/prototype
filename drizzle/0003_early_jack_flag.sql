@@ -1,0 +1,1 @@
+ALTER TYPE "public"."assistant_mode" ADD VALUE 'off' BEFORE 'browse';

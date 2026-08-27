@@ -25,13 +25,14 @@ import type { assistantModeEnum } from "@/db/schema";
 
 export type AssistantMode = (typeof assistantModeEnum.enumValues)[number];
 
-export const ASSISTANT_MODES = ["browse", "review", "verify"] as const;
+export const ASSISTANT_MODES = ["review", "browse", "verify", "off"] as const;
 
 /** Shown in the admin picker. Kept here so the wording lives in one place. */
 export const MODE_LABELS: Record<AssistantMode, string> = {
-  browse: "Browse",
   review: "Review",
+  browse: "Browse",
   verify: "Verify",
+  off: "No assistant",
 };
 
 export const MODE_DESCRIPTIONS: Record<AssistantMode, string> = {
@@ -41,7 +42,14 @@ export const MODE_DESCRIPTIONS: Record<AssistantMode, string> = {
     "The usual choice. Tasks are offered once, feedback is asked for at natural moments, and the assistant interrupts only on a strong signal.",
   verify:
     "You need the acceptance criteria checked. The criteria are offered early and a decision is asked for at the end. The most assertive setting.",
+  off:
+    "No assistant at all. The reviewer sees the scenario and the tasks, and writes their own feedback on a form. Nothing is sent to Anthropic. Right when you want a plain feedback tool, or when the conversation would get in the way.",
 };
+
+/** True when this prototype has no assistant and is a plain feedback form. */
+export function isAssistantOff(mode: AssistantMode): boolean {
+  return mode === "off";
+}
 
 export function isAssistantMode(value: unknown): value is AssistantMode {
   return (
