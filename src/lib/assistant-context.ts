@@ -20,6 +20,8 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
+import { MODE_DESCRIPTIONS, type AssistantMode } from "@/lib/briefing";
+
 /**
  * Read once per server instance rather than per message.
  *
@@ -52,12 +54,31 @@ export interface RecordedFeedback {
   note: string | null;
 }
 
+/** One thing the reviewer may be asked to try. */
+export interface ContextTask {
+  goal: string;
+  successState: string | null;
+}
+
+/** One thing the ticket promised. */
+export interface ContextCriterion {
+  ref: string | null;
+  text: string;
+  verifiableInPrototype: boolean;
+}
+
 export interface PrototypeContext {
   name: string;
   description: string | null;
   versionLabel: string;
   knowledgeBaseText: string | null;
   notBuilt: string[];
+  /** How hard to push. See prompts/assistant.md for what each one means. */
+  mode: AssistantMode;
+  /** The situation to set up in the opening, when there is one. */
+  scenario: string | null;
+  tasks: ContextTask[];
+  criteria: ContextCriterion[];
   /**
    * Everything logged so far in this reviewer's session.
    *
@@ -85,6 +106,82 @@ export async function buildSystemPrompt(context: PrototypeContext): Promise<stri
       .filter(Boolean)
       .join("\n"),
   );
+
+  // The mode, in the assistant's own vocabulary rather than as a bare word.
+  // prompts/assistant.md describes all three; this says which one is live and
+  // repeats the description so the two can never drift apart in the model's
+  // reading of them.
+  parts.push(
+    [
+      "# Mode",
+      "",
+      `This prototype is in ${context.mode.toUpperCase()} mode.`,
+      "",
+      MODE_DESCRIPTIONS[context.mode],
+      "",
+      "The reviewer's own intent overrides this. Someone who is clearly just",
+      "looking around gets browse behaviour whatever the mode says.",
+    ].join("\n"),
+  );
+
+  if (context.scenario?.trim()) {
+    parts.push(
+      [
+        "# Scenario",
+        "",
+        "Set this up in your opening, in one line, in your own words. Do not",
+        "read it out verbatim and do not repeat it later.",
+        "",
+        context.scenario.trim(),
+      ].join("\n"),
+    );
+  }
+
+  if (context.tasks.length > 0) {
+    parts.push(
+      [
+        "# Tasks",
+        "",
+        "What the reviewer can be asked to try. Offer these once, as a list,",
+        "when it fits -- never in your opening, because a task list as a",
+        "greeting reads like homework. Never navigate for them: if they cannot",
+        "find something, that is the finding.",
+        "",
+        ...context.tasks.map((task, index) => {
+          const line = `${index + 1}. ${task.goal}`;
+          return task.successState
+            ? `${line}\n   Done when: ${task.successState}`
+            : line;
+        }),
+      ].join("\n"),
+    );
+  }
+
+  if (context.criteria.length > 0) {
+    const checkable = context.criteria.filter((c) => c.verifiableInPrototype);
+    const notCheckable = context.criteria.filter((c) => !c.verifiableInPrototype);
+
+    parts.push(
+      [
+        "# Acceptance criteria",
+        "",
+        "What the ticket promised. A reviewer can give a verdict on each one.",
+        "",
+        ...checkable.map((c) => `- ${c.ref ? `${c.ref}: ` : ""}${c.text}`),
+        ...(notCheckable.length > 0
+          ? [
+              "",
+              "These cannot be checked by clicking a prototype -- they are about",
+              "timing, real data, notifications or another system. Say so plainly",
+              "if a reviewer tries; do not let them guess and do not record a",
+              "verdict on one.",
+              "",
+              ...notCheckable.map((c) => `- ${c.ref ? `${c.ref}: ` : ""}${c.text}`),
+            ]
+          : []),
+      ].join("\n"),
+    );
+  }
 
   if (context.knowledgeBaseText?.trim()) {
     parts.push(

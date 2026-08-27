@@ -22,10 +22,19 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { and, eq } from "drizzle-orm";
+import { and, eq, notInArray } from "drizzle-orm";
 
 import { getDb } from "@/db";
-import { prototype, version } from "@/db/schema";
+import { criterion, notBuilt, prototype, task, version } from "@/db/schema";
+import {
+  isAssistantMode,
+  type AssistantMode,
+  parseCriteria,
+  parseNotBuilt,
+  parseTasks,
+  type CriterionDraft,
+  type TaskDraft,
+} from "@/lib/briefing";
 import { hashPassword } from "@/lib/password";
 import {
   MAX_KNOWLEDGE_BASE_BYTES,
@@ -64,6 +73,16 @@ export async function updatePrototype(
   const knowledgeBaseText = String(formData.get("knowledgeBaseText") ?? "").trim();
   const knowledgeBaseFile = formData.get("knowledgeBaseFile");
 
+  // The briefing: what the assistant is told about this prototype beyond its
+  // name and knowledge base. Parsing lives in @/lib/briefing so it can be read
+  // on its own.
+  const modeRaw = String(formData.get("mode") ?? "");
+  const scenario = String(formData.get("scenario") ?? "").trim();
+  const notBuiltRaw = String(formData.get("notBuilt") ?? "");
+  const tasks = parseTasks(formData);
+  const criteria = parseCriteria(formData);
+  const notBuiltItems = parseNotBuilt(notBuiltRaw);
+
   // Echoed back on failure so nothing typed is lost. The password is
   // deliberately not echoed.
   const values = {
@@ -72,6 +91,8 @@ export async function updatePrototype(
     description,
     reviewerNames: reviewerNamesRaw,
     knowledgeBaseText,
+    scenario,
+    notBuilt: notBuiltRaw,
   };
 
   function reject(state: EditPrototypeState): EditPrototypeState {
@@ -97,6 +118,12 @@ export async function updatePrototype(
   const reviewerNames = parseReviewerNames(reviewerNamesRaw);
   if (reviewerNames.length === 0) {
     fieldErrors.reviewerNames = "Add at least one reviewer name, one per line.";
+  }
+
+  // The picker can only offer the three, so anything else was not typed by a
+  // person using the form.
+  if (!isAssistantMode(modeRaw)) {
+    fieldErrors.mode = "Choose how the assistant should behave.";
   }
 
   if (Object.keys(fieldErrors).length > 0) {
@@ -136,6 +163,8 @@ export async function updatePrototype(
           ticket: ticket || null,
           description: description || null,
           reviewerNames,
+          // Validated above, so the cast is checking what has been checked.
+          mode: modeRaw as AssistantMode,
           ...(passwordHash ? { passwordHash } : {}),
         })
         .where(eq(prototype.id, prototypeId))
@@ -145,15 +174,42 @@ export async function updatePrototype(
       // tab, most likely. Say so rather than reporting a save that did nothing.
       if (updated.length === 0) return false;
 
-      // The knowledge base belongs to the current version. Scoping the update
-      // by prototype id as well as is_current means it can only ever touch a
-      // version of *this* prototype.
-      await tx
+      // The knowledge base, the scenario, the tasks, the criteria and the
+      // not-built list all belong to the *version*, not the prototype, so an
+      // old version keeps the briefing it was actually reviewed against.
+      // Scoping by prototype id as well as is_current means this can only ever
+      // touch a version of *this* prototype.
+      const [current] = await tx
         .update(version)
-        .set({ knowledgeBaseText: knowledgeBase || null })
+        .set({
+          knowledgeBaseText: knowledgeBase || null,
+          scenario: scenario || null,
+        })
         .where(
           and(eq(version.prototypeId, prototypeId), eq(version.isCurrent, true)),
+        )
+        .returning({ id: version.id });
+
+      // A prototype with no current version has nowhere to put a briefing.
+      // The prototype's own fields are still saved, which is what the form
+      // says will happen.
+      if (!current) return true;
+
+      await writeTasks(tx, current.id, tasks);
+      await writeCriteria(tx, current.id, criteria);
+
+      // The not-built list has nothing pointing at it, so it is the one list
+      // that can safely be replaced outright.
+      await tx.delete(notBuilt).where(eq(notBuilt.versionId, current.id));
+      if (notBuiltItems.length > 0) {
+        await tx.insert(notBuilt).values(
+          notBuiltItems.map((text, index) => ({
+            versionId: current.id,
+            sortOrder: index,
+            text,
+          })),
         );
+      }
 
       return true;
     });
@@ -177,6 +233,112 @@ export async function updatePrototype(
   revalidatePath("/admin");
   revalidatePath(`/admin/${prototypeId}`);
   redirect(`/admin/${prototypeId}`);
+}
+
+
+/* --------------------------------------------------------------------------
+ * Writing the two lists that other rows point at.
+ *
+ * Not "delete everything and insert the new list". A reviewer's verdict on a
+ * criterion lives in ac_result and cascades when the criterion is deleted, so
+ * a wholesale replace would throw away every acceptance result on this version
+ * the moment somebody corrected a spelling mistake. Tasks get the same
+ * treatment because task results arrive in the next chunk.
+ *
+ * So: rows that came back with an id are updated in place, rows without one
+ * are inserted, and rows that were on the version but did not come back are
+ * deleted -- which is a real deletion, taking its results with it, because
+ * that is what removing a criterion means.
+ *
+ * The ids arrive from the browser and are therefore not trusted. Every update
+ * is scoped to the version being edited, so an id belonging to another version
+ * matches nothing and is written as a new row instead of hijacking someone
+ * else's.
+ * ------------------------------------------------------------------------ */
+
+type Tx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+
+async function writeTasks(tx: Tx, versionId: string, drafts: TaskDraft[]) {
+  const existing = await tx
+    .select({ id: task.id })
+    .from(task)
+    .where(eq(task.versionId, versionId));
+  const known = new Set(existing.map((row) => row.id));
+
+  const keep: string[] = [];
+
+  for (const [index, draft] of drafts.entries()) {
+    const values = {
+      sortOrder: index,
+      goal: draft.goal,
+      successState: draft.successState || null,
+    };
+
+    if (draft.id && known.has(draft.id)) {
+      await tx
+        .update(task)
+        .set(values)
+        .where(and(eq(task.id, draft.id), eq(task.versionId, versionId)));
+      keep.push(draft.id);
+    } else {
+      const [inserted] = await tx
+        .insert(task)
+        .values({ versionId, ...values })
+        .returning({ id: task.id });
+      keep.push(inserted.id);
+    }
+  }
+
+  await tx
+    .delete(task)
+    .where(
+      keep.length > 0
+        ? and(eq(task.versionId, versionId), notInArray(task.id, keep))
+        : eq(task.versionId, versionId),
+    );
+}
+
+async function writeCriteria(tx: Tx, versionId: string, drafts: CriterionDraft[]) {
+  const existing = await tx
+    .select({ id: criterion.id })
+    .from(criterion)
+    .where(eq(criterion.versionId, versionId));
+  const known = new Set(existing.map((row) => row.id));
+
+  const keep: string[] = [];
+
+  for (const [index, draft] of drafts.entries()) {
+    const values = {
+      sortOrder: index,
+      ref: draft.ref || null,
+      text: draft.text,
+      verifiableInPrototype: draft.verifiableInPrototype,
+    };
+
+    if (draft.id && known.has(draft.id)) {
+      await tx
+        .update(criterion)
+        .set(values)
+        .where(
+          and(eq(criterion.id, draft.id), eq(criterion.versionId, versionId)),
+        );
+      keep.push(draft.id);
+    } else {
+      const [inserted] = await tx
+        .insert(criterion)
+        .values({ versionId, ...values })
+        .returning({ id: criterion.id });
+      keep.push(inserted.id);
+    }
+  }
+
+  await tx
+    .delete(criterion)
+    .where(
+      keep.length > 0
+        ? and(eq(criterion.versionId, versionId), notInArray(criterion.id, keep))
+        : eq(criterion.versionId, versionId),
+    );
 }
 
 /*
