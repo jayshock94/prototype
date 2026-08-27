@@ -8,6 +8,13 @@
  * Doing this in middleware rather than in each page means a new admin page
  * added in a later chunk is protected automatically -- there is no way to
  * forget the check.
+ *
+ * THIS FILE MUST STAY AT src/middleware.ts. Next.js looks for middleware in
+ * exactly one place: next to the `app` directory. Because this project keeps
+ * `app` under `src/`, a middleware file at the repository root is silently
+ * ignored -- no error, no warning, and every admin page served to anyone who
+ * knows the URL. It sat at the root until this was noticed. If you move it,
+ * check that /admin redirects to /admin/login in a browser with no cookies.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
