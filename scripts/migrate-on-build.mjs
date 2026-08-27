@@ -30,6 +30,8 @@
  * still works on a machine that has never been pointed at a database.
  */
 
+import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
@@ -62,9 +64,11 @@ try {
   // One connection, and no prepared statements: a migration run is a single
   // short-lived job, and pooled Postgres endpoints reject prepared statements.
   const sql = postgres(url, { max: 1, prepare: false });
+  const migrationsFolder = path.join(process.cwd(), "drizzle");
 
   try {
-    await migrate(drizzle(sql), { migrationsFolder: path.join(process.cwd(), "drizzle") });
+    await baselineIfPushed(sql, migrationsFolder);
+    await migrate(drizzle(sql), { migrationsFolder });
     console.log(`[migrate] Up to date: ${safeTarget(url)}`);
   } finally {
     await sql.end({ timeout: 5 });
@@ -87,4 +91,76 @@ try {
   console.error("[migrate]   - two branches added a migration with the same number.");
   console.error("");
   process.exit(1);
+}
+
+/**
+ * Adopt a database that was built with `db:push` rather than by migrating.
+ *
+ * `drizzle-kit push` writes the schema straight into the database and records
+ * nothing, which is the fast way to get started and exactly what this project
+ * did. The bill arrives the first time a migration runs: Drizzle sees an empty
+ * history, tries to apply 0000 from the top, and dies on `type "..." already
+ * exists`.
+ *
+ * So: if the history is empty *and* the first migration's tables are already
+ * there, that migration provably does not need to run -- something else
+ * created those tables. Record it as applied and let the rest follow. The
+ * condition is deliberately narrow; on a genuinely empty database nothing
+ * happens here and 0000 runs normally.
+ *
+ * A row is (hash, created_at), where the hash is a sha256 of the migration
+ * file and created_at is its `when` from the journal. Drizzle compares
+ * created_at to decide what is outstanding, so getting that number right is
+ * what makes the next migration run.
+ */
+async function baselineIfPushed(sql, migrationsFolder) {
+  const [{ exists: tracked }] = await sql`
+    select exists (
+      select 1 from information_schema.tables
+      where table_schema = 'drizzle' and table_name = '__drizzle_migrations'
+    ) as exists
+  `;
+
+  if (tracked) {
+    const [{ count }] = await sql`
+      select count(*)::int as count from drizzle.__drizzle_migrations
+    `;
+    if (count > 0) return;
+  }
+
+  const [{ exists: hasSchema }] = await sql`
+    select exists (
+      select 1 from information_schema.tables
+      where table_schema = 'public' and table_name = 'prototype'
+    ) as exists
+  `;
+
+  // Nothing to adopt: a fresh database migrates from the top as usual.
+  if (!hasSchema) return;
+
+  const journal = JSON.parse(
+    fs.readFileSync(path.join(migrationsFolder, "meta", "_journal.json"), "utf8"),
+  );
+  const first = journal.entries?.[0];
+  if (!first) return;
+
+  const body = fs.readFileSync(path.join(migrationsFolder, `${first.tag}.sql`), "utf8");
+  const hash = crypto.createHash("sha256").update(body).digest("hex");
+
+  await sql`create schema if not exists drizzle`;
+  await sql`
+    create table if not exists drizzle.__drizzle_migrations (
+      id serial primary key,
+      hash text not null,
+      created_at bigint
+    )
+  `;
+  await sql`
+    insert into drizzle.__drizzle_migrations ("hash", "created_at")
+    values (${hash}, ${first.when})
+  `;
+
+  console.log(
+    `[migrate] This database was created with db:push, so ${first.tag} was recorded as already applied rather than run again.`,
+  );
 }
