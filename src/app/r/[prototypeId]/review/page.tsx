@@ -4,7 +4,7 @@ import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 
 import { getDb } from "@/db";
-import { message, prototype, session, version } from "@/db/schema";
+import { feedback, message, prototype, session, version } from "@/db/schema";
 import {
   hasValidPass,
   passCookieName,
@@ -12,7 +12,7 @@ import {
   sessionCookieName,
 } from "@/lib/reviewer-auth";
 import { hasAnthropicApiKey } from "@/lib/env";
-import { AssistantPanel, type ChatMessage } from "./assistant-panel";
+import { AssistantPanel, type TimelineEntry } from "./assistant-panel";
 
 export const metadata: Metadata = {
   title: "Review",
@@ -81,7 +81,10 @@ export default async function ReviewPage({
   // different prototype's row. Confirm it really belongs to this version
   // before showing anything.
   const [visit] = await db
-    .select({ reviewerName: session.reviewerName })
+    .select({
+      reviewerName: session.reviewerName,
+      completedAt: session.completedAt,
+    })
     .from(session)
     .where(and(eq(session.id, sessionId), eq(session.versionId, row.versionId)))
     .limit(1);
@@ -91,10 +94,66 @@ export default async function ReviewPage({
   // Reload the conversation so a reviewer who refreshes, or comes back to the
   // tab, does not find an empty panel and wonder if it was lost.
   const transcript = await db
-    .select({ id: message.id, role: message.role, content: message.content })
+    .select({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      createdAt: message.createdAt,
+    })
     .from(message)
     .where(eq(message.sessionId, sessionId))
     .orderBy(asc(message.createdAt));
+
+  const logged = await db
+    .select({
+      id: feedback.id,
+      screenId: feedback.screenId,
+      expected: feedback.expected,
+      happened: feedback.happened,
+      note: feedback.note,
+      severity: feedback.severity,
+      createdAt: feedback.createdAt,
+    })
+    .from(feedback)
+    .where(eq(feedback.sessionId, sessionId))
+    .orderBy(asc(feedback.createdAt));
+
+  /*
+   * Messages and feedback are stored in two tables but happened in one order,
+   * so they are merged back into one timeline by timestamp. A reviewer who
+   * refreshes sees what they said and what was captured from it in the same
+   * sequence as when it happened, rather than a conversation with the receipts
+   * swept into a pile at the end.
+   *
+   * An assistant message is written once the whole turn is done, so it lands
+   * after the feedback rows that turn produced. That is why a reload reads
+   * "you said this -> this was logged -> it replied", which is the honest
+   * order even though live streaming shows the reply beginning first.
+   */
+  const timeline: TimelineEntry[] = [
+    ...transcript.map((row) => ({
+      kind: "message" as const,
+      id: row.id,
+      role: row.role,
+      content: row.content,
+      at: row.createdAt.getTime(),
+    })),
+    ...logged.map((row) => ({
+      kind: "feedback" as const,
+      id: row.id,
+      item: {
+        id: row.id,
+        screenId: row.screenId,
+        expected: row.expected,
+        happened: row.happened,
+        note: row.note,
+        severity: row.severity,
+      },
+      at: row.createdAt.getTime(),
+    })),
+  ]
+    .sort((a, b) => a.at - b.at)
+    .map(({ at: _at, ...entry }) => entry);
 
   return (
     <div className="flex h-dvh flex-col bg-surface-container-lowest">
@@ -139,7 +198,8 @@ export default async function ReviewPage({
 
         <AssistantPanel
           prototypeId={prototypeId}
-          initialMessages={transcript as ChatMessage[]}
+          initialTimeline={timeline}
+          initiallyCompleted={visit.completedAt !== null}
           configured={hasAnthropicApiKey()}
         />
       </div>

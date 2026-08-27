@@ -89,6 +89,62 @@ export function SendIcon({ className }: IconProps) {
   );
 }
 
+export function DeleteIcon({ className }: IconProps) {
+  return (
+    <svg {...svgProps(className)}>
+      <path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z" />
+    </svg>
+  );
+}
+
+export function CheckIcon({ className }: IconProps) {
+  return (
+    <svg {...svgProps(className)}>
+      <path d="M382-240 154-468l57-57 171 171 367-367 57 57-424 424Z" />
+    </svg>
+  );
+}
+
+export function FlagIcon({ className }: IconProps) {
+  return (
+    <svg {...svgProps(className)}>
+      <path d="M200-120v-680h360l16 80h224v400H520l-16-80H280v280h-80Zm300-440Zm86 160h134v-240H510l-16-80H280v240h290l16 80Z" />
+    </svg>
+  );
+}
+
+export function ExpandMoreIcon({ className }: IconProps) {
+  return (
+    <svg {...svgProps(className)}>
+      <path d="M480-344 240-584l56-56 184 184 184-184 56 56-240 240Z" />
+    </svg>
+  );
+}
+
+export function CloseIcon({ className }: IconProps) {
+  return (
+    <svg {...svgProps(className)}>
+      <path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z" />
+    </svg>
+  );
+}
+
+export function ArrowBackIcon({ className }: IconProps) {
+  return (
+    <svg {...svgProps(className)}>
+      <path d="M313-440l224 224-57 56-320-320 320-320 57 56-224 224h487v80H313Z" />
+    </svg>
+  );
+}
+
+export function DownloadIcon({ className }: IconProps) {
+  return (
+    <svg {...svgProps(className)}>
+      <path d="M480-320 280-520l56-58 104 104v-326h80v326l104-104 56 58-200 200ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z" />
+    </svg>
+  );
+}
+
 export function EditIcon({ className }: IconProps) {
   return (
     <svg {...svgProps(className)}>

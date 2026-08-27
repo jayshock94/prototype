@@ -116,7 +116,8 @@ writing one-off styled elements, so later chunks stay consistent.
   `src/lib/env.ts` and used only there -- it must never reach the browser.
 - The system prompt is `prompts/assistant.md` (global, hand-edited) plus
   per-prototype context appended at request time: name, description, knowledge
-  base, and the not-built list. That file is bundled into the deployed function
+  base, the not-built list, and whatever this session has already logged. That
+  file is bundled into the deployed function
   by `outputFileTracingIncludes` in next.config.ts; a runtime path is invisible
   to Next's dependency tracing, so without that entry it works locally and
   fails in production.
@@ -131,12 +132,103 @@ writing one-off styled elements, so later chunks stay consistent.
 - The assistant has no screen awareness yet. The prompt tells it to ask which
   screen the reviewer means. Chunk 6 replaces that.
 
+## Feedback capture
+
+- **There is no "ask" versus "report" mode.** A reviewer does not know which of
+  the two they are doing until they have said it, so making them classify their
+  own thought before typing it is the friction this replaces. They type; the
+  assistant answers, and calls the `record_feedback` tool for anything that
+  reads as a finding.
+- The tool is defined in `src/lib/feedback-tool.ts`, and its field descriptions
+  are instructions as much as a schema -- Claude reads them, so they carry as
+  much weight as `prompts/assistant.md`.
+- The route handler writes the row, not the model. Everything arriving from a
+  tool call is trimmed and validated exactly like form input, and an item with
+  no text in any field is refused back to Claude as a tool error.
+- **Undo, not confirm.** Every recorded item leaves a receipt card inline in the
+  conversation with a one-click delete and an editable severity. Asking
+  permission before each write would put a dialog in the middle of every
+  sentence; letting them delete a wrong one costs a click.
+- Severity is Claude's guess and the reviewer's correction. Both work from the
+  same wording, because `SEVERITY_DESCRIPTIONS` in `src/lib/feedback.ts` is
+  rendered into the tool schema *and* shown in the picker.
+- What has already been logged goes into the system prompt, not the message
+  history -- the transcript says what was *said*, the feedback rows say what was
+  *kept*, and they diverge the moment a reviewer deletes something. This is what
+  stops the same complaint being logged twice.
+- The flag button beside the composer opens a short form that writes directly,
+  without Claude. It exists for reviewers who would rather fill something in,
+  and so that an Anthropic outage cannot cost a whole review session.
+- `/api/chat` streams **newline-delimited JSON**, not plain text, because one
+  turn can produce prose and feedback rows and the panel has to tell them apart.
+  Events are `{"t":"text","v":"…"}` and `{"t":"feedback","v":{…}}`.
+- Reviewer-owned routes (`/api/feedback`, `/api/feedback/[id]`,
+  `/api/review/finish`) all scope their WHERE to the session id from the cookie,
+  so knowing an item's UUID is not enough to change or delete it.
+- "Finish review" is one nullable timestamp, `session.completed_at`. Reopening
+  clears it, because a reviewer always remembers a fourth thing right after
+  pressing finish and a dead end there pushes them back to email.
+
+## Handing feedback over
+
+- Finishing a review offers a **download**, and that is the point of the finish
+  screen rather than an afterthought on it. A reviewer who screenshots things
+  on their own has to write the description, remember what they expected, and
+  organise it before sending anything; the download is the same work already
+  done. If it is not the loudest thing on that screen they fall back to the
+  habit it replaces.
+- `/api/review/export` returns a zip holding `feedback.html` and `feedback.md`
+  -- two files because there are two ways it actually gets sent. The HTML is
+  for attaching and prints to PDF from any browser; the Markdown is for pasting
+  into a ticket or a chat window, where an attachment is one click too many.
+  `?format=md` returns just the text, which is what the copy button uses.
+- The report carries the three things a screenshot cannot: structure (severity,
+  screen, expected against happened), the conversation, and provenance (which
+  prototype, which version, who, when).
+- **It has no screenshots yet.** Capturing the framed document is chunk 7. The
+  archive shape already allows for a `screenshots/` folder, so adding them
+  later changes the report template and nothing else.
+- The HTML is deliberately self-contained and light-only: inline CSS, system
+  fonts, no network requests, because it has to open as an email attachment on
+  a laptop with no connection. It is a document for printing, not a page that
+  should follow the reader's theme.
+- `src/lib/zip.ts` is a hand-written ZIP writer, not a dependency, because this
+  needs the smallest corner of the format. Its limits (no ZIP64, ASCII names)
+  are documented at the top and hold for a feedback export. Its output is
+  checked against the system `unzip` in the tests rather than against itself.
+- The download does **not** replace the admin area. Feedback is saved either
+  way, so a reviewer who closes the tab without downloading has still been
+  heard -- the file is a copy to send, not the only channel.
+
+## Admin review
+
+- `/admin/[prototypeId]/feedback` lists everything across all sessions, grouped
+  by version.
+- Two different orders, deliberately: versions newest-first because the current
+  version is what is actionable, items worst-first inside a version because
+  reading the page is triage. Group before sorting, or a blocker on an old
+  version drags that whole version to the top.
+- Filters live in the URL as search params and are rendered as links, so the
+  page needs no client JavaScript, the back button works, and a filtered view
+  can be sent to someone as a link.
+- Disposition saves on change with no save button. Untriaged is drawn as a
+  dashed outline and every disposition as a fill -- "won't do" is the quietest
+  fill and was indistinguishable from untriaged when both were neutral.
+- The page reads every row for the prototype and filters in memory. That is the
+  right trade at one designer's scale; when it stops being, push the WHERE down
+  and compute the filter counts with a GROUP BY.
+
 ## Where things are
 - `src/db/schema.ts`          Drizzle schema, all tables from the data model above
 - `src/db/index.ts`           Database client (`getDb()`)
 - `src/lib/auth.ts`           Admin cookie session (HMAC signed, httpOnly)
 - `src/lib/reviewer-auth.ts`  Reviewer pass and session cookies, per prototype
 - `src/lib/assistant-context.ts`  Builds the assistant's system prompt
+- `src/lib/feedback.ts`       Severity and disposition wording, shared everywhere
+- `src/lib/feedback-tool.ts`  The `record_feedback` tool Claude is given
+- `src/lib/export-report.ts`  Builds the reviewer's HTML and Markdown report
+- `src/lib/zip.ts`            Minimal ZIP writer, no dependency
+- `src/lib/reviewer-session.ts`   "Which review session is this, and is it allowed?"
 - `prompts/assistant.md`      The global assistant instructions, hand-edited
 - `src/lib/signing.ts`        HMAC signing shared by both
 - `src/lib/password.ts`       Reviewer password hashing (PBKDF2 via Web Crypto)
@@ -146,6 +238,7 @@ writing one-off styled elements, so later chunks stay consistent.
 - `src/app/p/[versionId]/`    Serves prototype HTML on our own origin
 - `src/app/r/[prototypeId]/`  Reviewer entry, and the review page
 - `src/app/admin/(dashboard)/[prototypeId]/edit/`  Editing an existing prototype
+- `src/app/admin/(dashboard)/[prototypeId]/feedback/`  Reading and triaging feedback
 - `src/middleware.ts`         Protects every /admin route except /admin/login.
                               **Must stay next to `src/app`.** It used to sit at
                               the repository root, where Next.js never looked --
@@ -204,14 +297,49 @@ an edit of this row, and it needs a label, a change note and a move of
 
 ## Build progress
 Built so far: chunks 1 (foundation), 2 (upload and same-origin serving),
-3 (reviewer entry and prototype render), 4 (the assistant), and admin editing
+3 (reviewer entry and prototype render), 4 (the assistant), 5 (feedback capture,
+admin review and the reviewer's downloadable report), and admin editing
 (`/admin/[prototypeId]/edit`).
 
-The plan then changed direction: the assistant's job is being narrowed to
-explaining what a prototype is for, and the feedback side to collecting
-structured responses. Admin editing is the first chunk of that work -- without
-it a prototype's description and knowledge base were write-once, which makes
-iterating on either impossible.
+## Where this is going
+
+The plan then changed direction, and the direction is now set by one document:
+`prompts/assistant.md`, which describes an assistant with a personality, a mode,
+and a job. Everything from here is built to make that file true.
+
+The job is a hybrid. A prototype review is part product-owner sign-off ("does
+this do what the ticket asked") and part usability test ("could a person
+actually do it"), and the same session has to serve both. That is why the
+report carries acceptance criteria *and* tasks *and* the path the reviewer
+took, and why any of those sections may be absent.
+
+**The one thing a review must capture is the gap between what a reviewer
+expected and what happened.** Every design decision from here answers to that:
+the assistant asks before they click rather than after, the report is built
+around expected-against-got, and severity is a stripe rather than a heading so
+a blocker never reads like a nitpick.
+
+Remaining work, in dependency order:
+
+1. **The briefing.** Admin authoring for mode, scenario, tasks, acceptance
+   criteria and the not-built list. Nothing else can happen until the assistant
+   has something to be about.
+2. **The new voice.** The personality file, a role picker after the name step,
+   and an opening message the assistant sends first.
+3. **Eyes.** Screen detection in the framed prototype, plus the path through it.
+   Timing is recorded because the "stalled" signal needs it, but never shown in
+   the report -- order and revisits are what a human can act on.
+4. **Hands.** Mark a task done, set a criteria result, flag a question, and
+   highlight an element. All of the first three confirm before saving.
+5. **Instincts.** Speaking unprompted on a strong signal, rate limited.
+6. **The handover.** The assistant writes the closing summary and the report is
+   rebuilt around the expectation gap.
+
+Two standing rules for all of it. Feedback is **confirmed before it is saved**,
+not saved and undone -- chunk 5 chose the opposite and the personality file
+overrides it. And every screen follows **Material 3**, using the tokens in
+`src/app/globals.css`, including the downloadable report, which inlines them
+because it has to open with no network.
 
 ## Note on real prototypes
 The first real prototype put through this marks its screens with

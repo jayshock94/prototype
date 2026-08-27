@@ -43,12 +43,31 @@ async function globalPrompt(): Promise<string> {
   return cachedGlobalPrompt;
 }
 
+/** One feedback row already recorded this visit, as the prompt describes it. */
+export interface RecordedFeedback {
+  severity: string;
+  screenId: string | null;
+  happened: string | null;
+  expected: string | null;
+  note: string | null;
+}
+
 export interface PrototypeContext {
   name: string;
   description: string | null;
   versionLabel: string;
   knowledgeBaseText: string | null;
   notBuilt: string[];
+  /**
+   * Everything logged so far in this reviewer's session.
+   *
+   * Deliberately not part of the message history. The transcript says what was
+   * *said*; this says what was *kept*, and the two drift apart the moment the
+   * reviewer deletes an item. Feeding the live list stops the assistant
+   * logging the same complaint twice when a reviewer circles back to it, and
+   * lets it answer "what have I flagged so far?" accurately.
+   */
+  recorded: RecordedFeedback[];
 }
 
 /** Assemble the full system prompt for one prototype. */
@@ -102,6 +121,31 @@ export async function buildSystemPrompt(context: PrototypeContext): Promise<stri
       ].join("\n"),
     );
   }
+
+  parts.push(
+    context.recorded.length > 0
+      ? [
+          "# Already recorded this session",
+          "",
+          "These are in the reviewer's list right now. Do not record any of them",
+          "again, even if the reviewer mentions it a second time -- say it is",
+          "already logged. If they add detail to one, say you have noted it and",
+          "record a new item only if it is genuinely a different point.",
+          "",
+          ...context.recorded.map((item) => {
+            const where = item.screenId ? ` (${item.screenId})` : "";
+            const body = [item.happened, item.expected, item.note]
+              .filter(Boolean)
+              .join(" / ");
+            return `- [${item.severity}]${where} ${body}`;
+          }),
+        ].join("\n")
+      : [
+          "# Already recorded this session",
+          "",
+          "Nothing yet.",
+        ].join("\n"),
+  );
 
   return parts.join("\n\n---\n\n");
 }
