@@ -11,6 +11,8 @@ import {
 } from "@/lib/feedback";
 import type { Severity } from "@/db/schema";
 
+import { Thumbnail } from "./pointing";
+
 /**
  * One feedback item, as the reviewer sees it. Two states.
  *
@@ -77,6 +79,20 @@ export function FeedbackCard({
           <DeleteIcon className="size-[18px]" />
         </IconButton>
       </div>
+
+      {/*
+        The picture, when they pointed at something. Above the words rather
+        than beside them: in a panel this narrow a thumbnail in a row is too
+        small to recognise, and recognising it is the entire job.
+      */}
+      {item.annotation ? (
+        <div className="mt-2 overflow-hidden rounded-sm border border-outline-variant bg-surface">
+          <Thumbnail
+            reference={item.annotation}
+            className="max-h-40 w-full object-contain"
+          />
+        </div>
+      ) : null}
 
       <dl className="mt-1.5 flex flex-col gap-1 text-body-small">
         {item.happened ? (

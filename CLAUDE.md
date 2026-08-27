@@ -43,7 +43,7 @@ not_built   id, version_id, text
 session     id, version_id, reviewer_name, started_at, completed_at
 message     id, session_id, role, content, created_at
 annotation  id, session_id, kind ('select'|'point'|'draw'), screen_id,
-            css_selector, coords_json, screenshot_blob_url, created_at
+            css_selector, label, coords_json, screenshot_blob_url, created_at
 feedback    id, session_id, annotation_id, screen_id, task_id, criterion_id,
             expected, happened, note, severity, disposition, created_at
 ac_result   id, session_id, criterion_id, result, note
@@ -185,9 +185,9 @@ writing one-off styled elements, so later chunks stay consistent.
 - The report carries the three things a screenshot cannot: structure (severity,
   screen, expected against happened), the conversation, and provenance (which
   prototype, which version, who, when).
-- **It has no screenshots yet.** Capturing the framed document is chunk 7. The
-  archive shape already allows for a `screenshots/` folder, so adding them
-  later changes the report template and nothing else.
+- **It carries screenshots**, inline in the HTML and as files in a
+  `screenshots/` folder. See "Eyes" below for how they are taken and why they
+  are in there twice.
 - The HTML is deliberately self-contained and light-only: inline CSS, system
   fonts, no network requests, because it has to open as an email attachment on
   a laptop with no connection. It is a document for printing, not a page that
@@ -229,6 +229,9 @@ writing one-off styled elements, so later chunks stay consistent.
 - `src/lib/export-report.ts`  Builds the reviewer's HTML and Markdown report
 - `src/lib/zip.ts`            Minimal ZIP writer, no dependency
 - `src/lib/reviewer-session.ts`   "Which review session is this, and is it allowed?"
+- `src/lib/prototype-eyes.ts` Reading the framed prototype: screens, clicks, names
+- `src/lib/element-capture.ts`  Turning part of the framed prototype into a PNG
+- `src/lib/annotation.ts`     The shape of a reference, and where its picture lives
 - `prompts/assistant.md`      The global assistant instructions, hand-edited
 - `src/lib/signing.ts`        HMAC signing shared by both
 - `src/lib/password.ts`       Reviewer password hashing (PBKDF2 via Web Crypto)
@@ -239,6 +242,7 @@ writing one-off styled elements, so later chunks stay consistent.
 - `src/lib/reviewer-role.ts`  The five roles, their wording, and what each changes
 - `src/app/p/[versionId]/`    Serves prototype HTML on our own origin
 - `src/app/r/[prototypeId]/`  Reviewer entry, and the review page
+- `src/app/api/annotation/`   Recording a reference, and serving its picture
 - `src/app/admin/(dashboard)/[prototypeId]/edit/`  Editing an existing prototype
 - `src/app/admin/(dashboard)/[prototypeId]/feedback/`  Reading and triaging feedback
 - `src/middleware.ts`         Protects every /admin route except /admin/login.
@@ -428,11 +432,111 @@ that: nothing is written until the reviewer says so.
   the assistant is free to propose the point again if the reviewer raises it
   differently.
 
+## Eyes
+
+The review page can read the framed prototype. This is the payoff for the
+same-origin rule: `iframe.contentDocument` is readable only because
+`/p/[versionId]` serves the file from our own domain, and everything below
+falls out of that one fact.
+
+Three things, in order of how much they cost.
+
+- **Which screen is showing.** Free, and always on. `currentScreen` looks for
+  `data-screen`, then `data-screen-label`, then a visible `<section id>`, and
+  picks the largest visible one. It accepts both attributes because the
+  convention says one thing and the first real prototype did the other, and a
+  detector that only understands the documented spelling detects nothing. It is
+  re-read from a MutationObserver plus a poll for the first eight seconds,
+  because a bundled app paints about a second after the frame fires `load`.
+- **The path.** Every click, with the element's name and whether anything in the
+  document changed within 400ms. Kept in the browser, in a ref, and sent as a
+  short digest with each message -- there is no table for it, and a reviewer
+  who closes the tab leaves nothing behind. Timing is recorded and never shown,
+  exactly as this file said it would be.
+- **A reference.** The reviewer presses the target button and clicks something.
+  That takes a picture, writes an `annotation` row, and the next feedback item
+  they save picks it up.
+
+Some rules that are easy to break later:
+
+- **Nothing writes to the framed document.** Not one attribute, not one style.
+  It is somebody's finished artefact and a review must not be able to change
+  what it is reviewing. The hover highlight during pointing is a div in the
+  parent, positioned over the top.
+- **`instanceof` does not work on nodes in the frame.** Every document has its
+  own copy of every DOM class, so `node instanceof Element` is false for every
+  element in the prototype -- silently, with no error. The first version of the
+  capture used it as a sanity check and every capture failed with "there was
+  nothing to capture". Compare `tagName` and `nodeType` instead.
+- **Pointing is done with an overlay, not by listening for clicks.** A
+  transparent sheet over the iframe takes the mouse, and the element under the
+  pointer is found with `elementFromPoint`. The prototype therefore never
+  receives the click at all, so choosing what to point at cannot submit a form
+  or navigate away from the thing being pointed at.
+- **The click step is emitted before we know whether it was dead**, and the
+  answer is written onto the same object 400ms later. Waiting first would put
+  the click *after* the screen change it caused, and label it with the screen it
+  arrived at rather than the one it was made on.
+
+### The picture
+
+`src/lib/element-capture.ts` builds an SVG whose `<foreignObject>` holds a copy
+of the document with every computed style inlined, hands it to an `<img>`, and
+paints that onto a canvas. It is written out rather than taken from a library
+because the element lives in *another document* and the usual libraries read
+computed styles from the wrong window, which produces a stack of unstyled text
+that looks enough like an answer to be mistaken for one.
+
+It is a crop around the element with a red rectangle drawn on it, not a picture
+of the element alone: a button on its own tells you nothing, and where it sits is
+the whole point. The rectangle is stroked onto the canvas afterwards so no style
+in the prototype can affect it and no `overflow: hidden` can clip it.
+
+Its limits are listed at the top of that file and all of them are silent -- the
+picture comes out with the missing part missing. The important ones: images
+loaded from another site do not appear, web fonts fall back to the system font,
+and `::before`/`::after` are not copied. That is a property of rendering SVG in
+an `<img>`, which refuses every external reference. A prototype that inlines its
+images as `data:` URIs, which is what "one self-contained HTML file" means here,
+is unaffected.
+
+### Where a picture goes
+
+- Stored in Blob privately, like everything else, and served only through
+  `/api/annotation/[id]/image`. That route answers the admin, and the reviewer
+  whose *session* the annotation belongs to. Not "a reviewer of this prototype":
+  holding the password is not the same as having taken the picture.
+- The browser posts the PNG to `/api/annotation` as multipart form data, which
+  is the opposite of how prototype HTML is uploaded. Deliberate: a prototype can
+  be tens of megabytes and a crop of one screen is a few hundred kilobytes, so
+  the direct-to-Blob token dance buys nothing here.
+- In the report it appears twice. Inline in the HTML as a data URI, because the
+  file has to open as an email attachment with no network and a
+  `src="screenshots/.."` is a broken image the moment somebody forwards the HTML
+  on its own; and as a real file in `screenshots/` in the archive, because a
+  designer wants to drag one into a ticket. `?format=md`, which is the copy
+  button, carries neither -- it says a screenshot exists and where to find it,
+  because a broken image link in a pasted ticket looks like a mistake.
+- On `/admin/[prototypeId]/feedback`, above the words.
+
+### What the assistant does with it
+
+The screen, the path and the pending reference are sent with each message and
+appear as `# Where they are right now`. The instruction attached to them is to
+use it and not to recite it: knowing which screen somebody is on is for asking a
+better question, not for telling them where they are. The generated capability
+list moved four lines from "cannot see" to "can see" the day this landed, which
+is the whole reason that list is generated.
+
+The assistant cannot take a picture itself. It can ask the reviewer to point at
+something, and "point at it" -- which the personality file has always said -- is
+now a real instruction with a button behind it.
+
 ## Build progress
 Built so far: chunks 1 (foundation), 2 (upload and same-origin serving),
 3 (reviewer entry and prototype render), 4 (the assistant), 5 (feedback capture,
-admin review and the reviewer's downloadable report), and admin editing
-(`/admin/[prototypeId]/edit`).
+admin review and the reviewer's downloadable report), admin editing
+(`/admin/[prototypeId]/edit`), the briefing, the new voice, and the eyes.
 
 ## Where this is going
 
@@ -458,11 +562,13 @@ Remaining work, in dependency order:
    the not-built list are authored in the edit form and reach the assistant.
 2. ~~**The new voice.**~~ Done. The personality file, the role picker, the
    opening message, and confirm-before-save.
-3. **Eyes.** Screen detection in the framed prototype, plus the path through it.
-   Timing is recorded because the "stalled" signal needs it, but never shown in
-   the report -- order and revisits are what a human can act on.
+3. ~~**Eyes.**~~ Done. Screen detection, the path through the prototype, and
+   pointing at an element to put a picture of it in the report. Timing is
+   recorded because the "stalled" signal needs it, and never shown.
 4. **Hands.** Mark a task done, set a criteria result, flag a question, and
    highlight an element. All of the first three confirm before saving.
+   Highlighting is the one the eyes have already paid for: the annotation row
+   stores a CSS selector precisely so an element can be found again.
 5. **Instincts.** Speaking unprompted on a strong signal, rate limited.
 6. **The handover.** The assistant writes the closing summary and the report is
    rebuilt around the expectation gap.
@@ -476,10 +582,12 @@ because it has to open with no network.
 ## Note on real prototypes
 The first real prototype put through this marks its screens with
 `data-screen-label`, not the `data-screen` attribute assumed above, and renders
-as a bundled app rather than plain show/hide divs. Screen detection in chunk 6
-should accept both attributes, and should wait for the framed document to
-finish rendering rather than reading it on load -- the content appears a
-second or so after the iframe fires `load`.
+as a bundled app rather than plain show/hide divs. Both of those are handled --
+`src/lib/prototype-eyes.ts` accepts either attribute and keeps looking for eight
+seconds after `load`, because the content appears a second or so later. Keep
+that in mind when adding anything else that reads the frame: the honest
+assumption is that a prototype arrives however it arrives, and reading it once
+on `load` reads an empty page.
 
 <!-- BEGIN:nextjs-agent-rules -->
 

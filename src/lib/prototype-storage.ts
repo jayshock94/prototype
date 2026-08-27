@@ -103,6 +103,74 @@ export async function putPrototypeHtml({
 }
 
 /**
+ * The size ceiling for one annotation screenshot.
+ *
+ * These DO travel through a function, unlike prototype HTML: the browser posts
+ * the PNG to /api/annotation and the server puts it in Blob. The direct-upload
+ * dance exists because a prototype can be tens of megabytes; a crop of one
+ * screen is a few hundred kilobytes, and a token round trip to save a fraction
+ * of a second is complexity bought for nothing.
+ *
+ * 3 MB keeps it comfortably under the 4.5 MB a Vercel function may receive,
+ * with room for the rest of the form. src/lib/element-capture.ts caps the
+ * picture it produces well below this, so anything reaching the limit is not
+ * a screenshot.
+ */
+export const MAX_ANNOTATION_IMAGE_BYTES = 3 * 1024 * 1024;
+
+/**
+ * Store one annotation's screenshot and return the URL to record on the row.
+ *
+ * Private, like everything else in the store. The only way to see it is through
+ * /api/annotation/[id]/image, which checks that the caller owns the review
+ * session it belongs to -- so a screenshot of somebody's unreleased design is
+ * not a URL away from being public.
+ */
+export async function putAnnotationImage({
+  sessionId,
+  data,
+}: {
+  sessionId: string;
+  data: Buffer;
+}): Promise<string> {
+  const result = await put(`annotations/${sessionId}/shot.png`, data, {
+    access: "private",
+    contentType: "image/png",
+    addRandomSuffix: true,
+    token: blobToken(),
+  });
+
+  return result.url;
+}
+
+/**
+ * Read one annotation's screenshot back as bytes.
+ *
+ * Bytes rather than a stream, because both callers need the whole thing in
+ * hand: the image route sends it in one response, and the export inlines it
+ * into an HTML file. Returns null when the blob is missing, which every caller
+ * turns into "no picture" rather than an error -- a report is still worth
+ * having when one image has gone astray.
+ */
+export async function getAnnotationImage(blobUrl: string): Promise<Buffer | null> {
+  const stream = await getBlobStream(blobUrl);
+  if (!stream) return null;
+
+  try {
+    const chunks: Uint8Array[] = [];
+    const reader = stream.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value as Uint8Array);
+    }
+    return Buffer.concat(chunks);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Turn a stored blob URL back into the blob's pathname.
  *
  * A Blob URL is `https://<store>.blob.vercel-storage.com/<pathname>`, so the
@@ -133,6 +201,11 @@ function pathnameFromBlobUrl(blobUrl: string): string | null {
 export async function getPrototypeHtmlStream(
   blobUrl: string,
 ): Promise<ReadableStream | null> {
+  return getBlobStream(blobUrl);
+}
+
+/** The same read, for anything else we have put in the store. */
+async function getBlobStream(blobUrl: string): Promise<ReadableStream | null> {
   const isBlobStoreUrl = (() => {
     try {
       return new URL(blobUrl).hostname.endsWith(".blob.vercel-storage.com");

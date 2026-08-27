@@ -15,9 +15,12 @@
  * gets sent. The HTML is for attaching, and for printing to PDF. The Markdown
  * is for pasting into a ticket or a chat window without reformatting it.
  *
- * TODO (chunk 7): when annotations carry screenshots, add a `screenshots/`
- * folder to the archive and reference the images from the HTML. The archive
- * shape is already built for it.
+ * Screenshots are in, and they are in twice on purpose. The HTML carries each
+ * one inline as a data URI, because the report has to open as an email
+ * attachment on a laptop with no connection and an <img src="screenshots/..">
+ * is a broken image the moment somebody forwards the HTML on its own. The
+ * archive also holds the PNGs as real files, because a designer wants to drag
+ * one into a ticket without extracting it from a base64 string.
  */
 
 import "server-only";
@@ -29,8 +32,28 @@ import {
 } from "@/lib/feedback";
 import type { Severity } from "@/db/schema";
 
+/** One screenshot, as it goes into the archive. */
+export interface ExportShot {
+  /** Path inside the archive, e.g. `screenshots/01-continue-button.png`. */
+  path: string;
+  /** What it is a picture of, in words. Becomes the alt text. */
+  label: string;
+  /**
+   * The picture itself, or null when it was not fetched.
+   *
+   * Null is the ordinary case for `?format=md`, which produces text for
+   * pasting into a ticket: downloading a dozen PNGs to render a string nobody
+   * will see them in is work for nothing. The report still says a picture
+   * exists, because "there is a screenshot of this in the download" is worth
+   * knowing and silence is not.
+   */
+  bytes: Buffer | null;
+}
+
 export interface ExportItem extends FeedbackItem {
   createdAt: Date;
+  /** The picture of what they pointed at, when they pointed at something. */
+  shot?: ExportShot | null;
 }
 
 export interface ExportMessage {
@@ -214,6 +237,15 @@ p { margin: 0 0 10px; }
 }
 .item dd { margin: 0; white-space: pre-wrap; }
 
+.shot { margin: 0 0 12px; }
+.shot img {
+  display: block; max-width: 100%; height: auto;
+  border: 1px solid var(--line); border-radius: 6px;
+}
+.shot figcaption {
+  color: var(--muted); font-size: 12px; margin-top: 5px;
+}
+
 .turn { margin: 0 0 14px; break-inside: avoid; page-break-inside: avoid; }
 .turn-who {
   font-size: 11px; letter-spacing: .07em; text-transform: uppercase;
@@ -239,9 +271,46 @@ footer {
 }
 `.trim();
 
+/**
+ * How much base64 image the HTML file may carry.
+ *
+ * Inlining is not optional -- a report that loads its pictures from a folder is
+ * a report with broken images the first time somebody forwards the HTML on its
+ * own -- but base64 is a third bigger than the file it encodes, and a review
+ * with forty screenshots would produce something no mail server will accept.
+ * Past this point the pictures stay in the archive and the HTML says where to
+ * find them, which is a worse report than one with the images in it and a much
+ * better one than an attachment that bounces.
+ */
+const MAX_INLINE_IMAGE_BYTES = 12 * 1024 * 1024;
+
+/**
+ * The picture for one item, inline if there is room left.
+ *
+ * The caption is what the reviewer pointed at, not "screenshot": a picture with
+ * a caption naming the thing in it can be read on its own, which is how these
+ * end up pasted into a ticket without the paragraph they came from.
+ */
+function shotHtml(item: ExportItem, budget: { left: number }): string {
+  const shot = item.shot;
+  if (!shot) return "";
+
+  if (!shot.bytes || shot.bytes.length > budget.left) {
+    return `<figure class="shot"><figcaption>Screenshot: ${esc(shot.label)} — see <code>${esc(shot.path)}</code> in this archive.</figcaption></figure>`;
+  }
+
+  budget.left -= shot.bytes.length;
+
+  return `<figure class="shot">
+        <img src="data:image/png;base64,${shot.bytes.toString("base64")}" alt="${esc(shot.label)}">
+        <figcaption>${esc(shot.label)}</figcaption>
+      </figure>`;
+}
+
 export function buildReportHtml(data: ExportData, now: Date): string {
   const items = ordered(data.items);
   const counts = countsBySeverity(items);
+  const budget = { left: MAX_INLINE_IMAGE_BYTES };
 
   const meta = [
     data.ticket ? ["Ticket", data.ticket] : null,
@@ -264,6 +333,7 @@ export function buildReportHtml(data: ExportData, now: Date): string {
         ${item.screenId ? `<span class="item-where">${esc(item.screenId)}</span>` : ""}
         <span class="item-when">${esc(formatDateTime(item.createdAt))}</span>
       </div>
+      ${shotHtml(item, budget)}
       <dl>
         ${item.happened ? `<dt>Happened</dt><dd>${esc(item.happened)}</dd>` : ""}
         ${item.expected ? `<dt>Expected</dt><dd>${esc(item.expected)}</dd>` : ""}
@@ -343,7 +413,18 @@ ${itemsHtml}
  * or an email body, where an attachment is one click too many and nobody opens
  * it anyway.
  */
-export function buildReportMarkdown(data: ExportData, now: Date): string {
+export function buildReportMarkdown(
+  data: ExportData,
+  now: Date,
+  /**
+   * True when this Markdown is going into the archive beside a `screenshots/`
+   * folder, so a relative image link resolves. The copy-to-clipboard button
+   * passes false: pasting `![](screenshots/01.png)` into a ticket produces a
+   * broken image, and a line saying a picture exists is more use than one that
+   * looks like a mistake.
+   */
+  options: { archive: boolean } = { archive: false },
+): string {
   const items = ordered(data.items);
   const counts = countsBySeverity(items);
 
@@ -376,6 +457,14 @@ export function buildReportMarkdown(data: ExportData, now: Date): string {
     for (const item of items) {
       const where = item.screenId ? ` — ${item.screenId}` : "";
       lines.push(`### ${SEVERITY_LABELS[item.severity]}${where}`, "");
+      if (item.shot) {
+        lines.push(
+          options.archive
+            ? `![${item.shot.label}](${item.shot.path})`
+            : `_Pointed at: ${item.shot.label}. There is a screenshot of it in the downloaded file._`,
+          "",
+        );
+      }
       if (item.happened) lines.push(`**Happened:** ${item.happened}`, "");
       if (item.expected) lines.push(`**Expected:** ${item.expected}`, "");
       if (item.note) lines.push(`**Note:** ${item.note}`, "");

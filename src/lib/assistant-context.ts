@@ -68,6 +68,26 @@ export interface ContextCriterion {
   verifiableInPrototype: boolean;
 }
 
+/**
+ * What the reviewer's browser can see of the prototype right now.
+ *
+ * All of it comes from the browser, because only the browser can read the
+ * framed document -- the server never sees it. It is therefore untrusted input
+ * and is trimmed like anything else typed into a box, which is also why none of
+ * it is ever treated as an instruction.
+ *
+ * Absent on a prototype that marks no screens, and absent entirely on the first
+ * turn of a session that has not begun.
+ */
+export interface Looking {
+  /** The screen showing right now, when the prototype says which one it is. */
+  screen: string | null;
+  /** The last few things the reviewer did, already worded for reading. */
+  path: string;
+  /** What they have just pointed at, waiting to be attached to something. */
+  reference: { label: string | null; screenId: string | null } | null;
+}
+
 export interface PrototypeContext {
   name: string;
   description: string | null;
@@ -83,6 +103,8 @@ export interface PrototypeContext {
   scenario: string | null;
   tasks: ContextTask[];
   criteria: ContextCriterion[];
+  /** Where the reviewer is in the prototype, as of this message. */
+  looking: Looking;
   /**
    * Everything logged so far in this reviewer's session.
    *
@@ -140,6 +162,8 @@ export async function buildSystemPrompt(context: PrototypeContext): Promise<stri
       "looking around gets browse behaviour whatever the mode says.",
     ].join("\n"),
   );
+
+  parts.push(watching(context.looking));
 
   if (context.scenario?.trim()) {
     parts.push(
@@ -267,6 +291,65 @@ export async function buildSystemPrompt(context: PrototypeContext): Promise<stri
 }
 
 /* --------------------------------------------------------------------------
+ * Where the reviewer is.
+ *
+ * The awkward part of this section is not building it, it is saying what to do
+ * with it. prompts/assistant.md is explicit: "I see you have been on the plan
+ * screen for two minutes" is creepy, and "anything missing here?" is the same
+ * observation used well. So the instruction here is to use it and not to recite
+ * it, and it is repeated where the facts are rather than left in the global
+ * file, because this is the section that tempts.
+ * ------------------------------------------------------------------------ */
+function watching(looking: Looking): string {
+  const lines = ["# Where they are right now", ""];
+
+  if (looking.screen) {
+    lines.push(
+      `They are on the screen the prototype calls **${looking.screen}**.`,
+      "",
+      "Use that name when you propose feedback. Do not ask which screen they",
+      "mean, and do not read the name back to them -- it is theirs to recognise,",
+      "not yours to announce.",
+    );
+  } else {
+    lines.push(
+      "This prototype does not say which screen is showing, so you do not know.",
+      "Ask which screen they mean when it matters, once, plainly.",
+    );
+  }
+
+  if (looking.path.trim()) {
+    lines.push(
+      "",
+      "What they have just done, oldest first:",
+      "",
+      looking.path.trim(),
+      "",
+      "This is context, never conversation. Never narrate it back. A click",
+      "marked \"nothing happened\" means the prototype did not change when they",
+      "pressed it -- worth mentioning once if they press it again, and never a",
+      "finding on its own, because plenty of things correctly do nothing.",
+    );
+  }
+
+  if (looking.reference) {
+    const what = looking.reference.label ?? "part of the screen";
+    lines.push(
+      "",
+      `They have just pointed at **${what}**` +
+        (looking.reference.screenId ? ` on ${looking.reference.screenId}.` : "."),
+      "",
+      "A picture of it is waiting in their panel and will be attached to the",
+      "next thing they save. So do not ask them which element they mean, and do",
+      "not ask them to describe it: they have shown you. Ask what is wrong with",
+      "it, or what they expected it to do.",
+    );
+  }
+
+  return lines.join("\n");
+}
+
+/* --------------------------------------------------------------------------
  * What the assistant can actually see and do, right now.
  *
  * prompts/assistant.md deliberately does not list these. That file is written
@@ -286,21 +369,25 @@ function capabilities(): string {
   const canSee = [
     "Everything in the sections above: what this prototype is, its mode, who is reviewing and as what, the tasks, the criteria, what is deliberately not built, and everything already saved this session.",
     "The conversation itself.",
+    "Which screen they are on, when the prototype marks its screens. The section above says so, or says that it does not.",
+    "The last few things they did: which screens they moved between, what they clicked, and whether the prototype changed when they clicked it.",
+    "The name of anything they have pointed at, and that a picture of it is waiting.",
   ];
 
   const cannotSee = [
-    "Which screen the reviewer is on, or anything on it. You cannot see the prototype at all.",
-    "Where they have been, how long they have been there, or what they have clicked.",
-    "Anything they have selected or pointed at.",
+    "The screen itself. You know its name and what was clicked; you have never seen the pixels and cannot describe what anything looks like.",
+    "Anything they have typed into the prototype, or how long they have been anywhere.",
   ];
 
   const canDo = [
     "Propose a feedback item. The reviewer sees it as a draft and saves or discards it.",
+    "Ask them to point at something. There is a target button beside the message box: pressing it and then clicking anything in the prototype takes a picture of it, which is attached to the next thing they save. \"Point at it\" is a real instruction here, not a figure of speech.",
   ];
 
   const cannotDo = [
+    "Take a picture yourself. Only the reviewer can, with the button described above.",
     "Mark a task done, or record a verdict on an acceptance criterion. You can still talk about both, and anything they say about one is worth proposing as feedback.",
-    "Highlight or point at anything in the prototype.",
+    "Highlight or point at anything in the prototype yourself.",
     "Write the closing summary. The reviewer gets a report built from what they saved.",
   ];
 
@@ -316,9 +403,10 @@ function capabilities(): string {
     "You cannot see:",
     ...cannotSee.map((line) => `- ${line}`),
     "",
-    "Because you cannot see the screen, ask which one they mean when it matters,",
-    "and never guess a screen name when you propose something. Ask once, plainly,",
-    "then move on.",
+    "Use what you are given and do not narrate it. Knowing which screen somebody",
+    "is on is for asking a better question, not for telling them where they are.",
+    "Never guess a screen name when you propose something: use the one you were",
+    "given, or leave it out and let it be filled in.",
     "",
     "You can:",
     ...canDo.map((line) => `- ${line}`),

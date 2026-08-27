@@ -15,8 +15,11 @@
 
 import { NextResponse } from "next/server";
 
+import { and, eq } from "drizzle-orm";
+
 import { getDb } from "@/db";
-import { feedback } from "@/db/schema";
+import { annotation, feedback } from "@/db/schema";
+import { annotationImageUrl } from "@/lib/annotation";
 import { cleanField, isSeverity } from "@/lib/feedback";
 import { currentReviewerSession } from "@/lib/reviewer-session";
 
@@ -53,11 +56,62 @@ export async function POST(request: Request) {
     );
   }
 
-  const [row] = await getDb()
+  const db = getDb();
+
+  /*
+   * The reference, if the reviewer pointed at something before saying this.
+   *
+   * An annotation id arriving from the browser is user input like anything
+   * else, so it is looked up scoped to this session. An id belonging to
+   * somebody else's review matches nothing and the item is saved without a
+   * picture, rather than the save failing -- what the reviewer said is the
+   * part worth keeping, and losing it over a stale reference would be a poor
+   * trade.
+   */
+  let attached: {
+    id: string;
+    screenId: string | null;
+    label: string | null;
+    hasImage: boolean;
+  } | null = null;
+
+  const annotationId = cleanField(payload.annotationId);
+  if (annotationId && UUID.test(annotationId)) {
+    const [found] = await db
+      .select({
+        id: annotation.id,
+        screenId: annotation.screenId,
+        label: annotation.label,
+        screenshotBlobUrl: annotation.screenshotBlobUrl,
+      })
+      .from(annotation)
+      .where(
+        and(
+          eq(annotation.id, annotationId),
+          eq(annotation.sessionId, reviewer.sessionId),
+        ),
+      )
+      .limit(1);
+
+    if (found) {
+      attached = {
+        id: found.id,
+        screenId: found.screenId,
+        label: found.label,
+        hasImage: Boolean(found.screenshotBlobUrl),
+      };
+    }
+  }
+
+  const [row] = await db
     .insert(feedback)
     .values({
       sessionId: reviewer.sessionId,
-      screenId,
+      annotationId: attached?.id ?? null,
+      // A reference knows which screen it was taken on, and that is a fact
+      // rather than a guess, so it wins over anything the assistant inferred
+      // or the reviewer typed.
+      screenId: attached?.screenId ?? screenId,
       happened,
       expected,
       note,
@@ -72,5 +126,17 @@ export async function POST(request: Request) {
       severity: feedback.severity,
     });
 
-  return NextResponse.json({ item: row });
+  return NextResponse.json({
+    item: {
+      ...row,
+      annotation: attached
+        ? {
+            id: attached.id,
+            screenId: attached.screenId,
+            label: attached.label,
+            imageUrl: attached.hasImage ? annotationImageUrl(attached.id) : null,
+          }
+        : null,
+    },
+  });
 }

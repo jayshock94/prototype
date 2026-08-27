@@ -83,7 +83,7 @@ export const proposeFeedbackTool: Anthropic.Tool = {
       screen_id: {
         type: "string",
         description:
-          "Which screen or part of the prototype this is about, as the reviewer named it. You cannot see their screen, so omit this unless they said it. Never guess.",
+          "Which screen this is about. Omit it and the screen the reviewer is actually on is filled in, which is right almost every time -- only set it when the point is about a different screen from the one in front of them, and then use the name from the context above rather than inventing one.",
       },
       severity: {
         type: "string",

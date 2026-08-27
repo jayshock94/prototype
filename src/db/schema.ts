@@ -294,7 +294,17 @@ export const message = pgTable(
 );
 
 /* --------------------------------------------------------------------------
- * annotation -- where in the prototype the reviewer was pointing. Chunks 6-7.
+ * annotation -- where in the prototype the reviewer was pointing.
+ *
+ * Written when a reviewer presses "point at something" and clicks part of the
+ * prototype. One row is one reference: which screen, which element, what to
+ * call it, and a picture of it in its surroundings.
+ *
+ * A row is created before it belongs to anything. The reviewer points first and
+ * says what is wrong afterwards, which is the order the thought actually
+ * happens in, so the picture is taken immediately and the next feedback item
+ * saved in that session picks it up. One that is never claimed is a reference
+ * they thought better of, and it costs a row and a small PNG.
  * ------------------------------------------------------------------------ */
 
 export const annotation = pgTable(
@@ -309,6 +319,16 @@ export const annotation = pgTable(
     screenId: text("screen_id"),
     /** Set for kind 'select'. */
     cssSelector: text("css_selector"),
+    /**
+     * What to call the thing that was pointed at, in words.
+     *
+     * A CSS selector is how a machine finds it again; this is how a person
+     * recognises it. "Continue button", "field under Payment details". Built
+     * by describeElement in src/lib/prototype-eyes.ts, which is also what the
+     * assistant is told, so the reviewer, the assistant and the report all
+     * call the same thing by the same name.
+     */
+    label: text("label"),
     /** Pin or path coordinates for kind 'point' and 'draw'. */
     coordsJson: jsonb("coords_json"),
     /** Screenshot of the annotated area, in Vercel Blob. */

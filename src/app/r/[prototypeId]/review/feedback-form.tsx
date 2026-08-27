@@ -32,13 +32,22 @@ import type { Severity } from "@/db/schema";
 export function FeedbackForm({
   onSubmit,
   onCancel,
+  screenId: detected,
 }: {
   onSubmit: (draft: Omit<FeedbackItem, "id">) => Promise<boolean>;
   onCancel: () => void;
+  /**
+   * The screen showing in the prototype right now, when it says which one it
+   * is. Filled in rather than asked for: a reviewer typing the name of the
+   * screen they are looking at is work the page can do for them, and the
+   * field stays editable because a marked-up prototype can still be wrong
+   * about which of its screens is on top.
+   */
+  screenId?: string | null;
 }) {
   const [happened, setHappened] = useState("");
   const [expected, setExpected] = useState("");
-  const [screenId, setScreenId] = useState("");
+  const [screenId, setScreenId] = useState(detected ?? "");
   const [severity, setSeverity] = useState<Severity>("minor");
   const [saving, setSaving] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);

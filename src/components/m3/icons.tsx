@@ -152,3 +152,29 @@ export function EditIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+/**
+ * "Point at something in the prototype."
+ *
+ * A selection frame with a target in the middle. Drawn by hand rather than
+ * taken from Material Symbols: the closest official symbol is `highlight_alt`,
+ * which reads as a text-selection tool, and this button does something people
+ * have to understand from the icon on the first try.
+ */
+export function PointAtIcon({ className }: IconProps) {
+  return (
+    <svg {...svgProps(className)}>
+      <path d="M120-600v-240h240v80H200v160h-80Zm720 0v-240H600v80h160v160h80ZM120-360v240h240v-80H200v-160h-80Zm720 0v240H600v-80h160v-160h80Z" />
+      <path d="M440-620h80v100h100v80H520v100h-80v-100H340v-80h100v-100Z" />
+    </svg>
+  );
+}
+
+/** A picture. Used where a screenshot is expected but has not arrived. */
+export function ImageIcon({ className }: IconProps) {
+  return (
+    <svg {...svgProps(className)}>
+      <path d="M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm0-80h560v-560H200v560Zm40-80h480L570-480 450-320l-90-120-120 160Z" />
+    </svg>
+  );
+}
