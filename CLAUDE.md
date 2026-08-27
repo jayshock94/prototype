@@ -332,6 +332,41 @@ by `src/lib/assistant-context.ts`.
   is the classic bug here: delete the first of three rows and the remaining text
   appears to jump between fields.
 
+## Prototypes with no assistant
+
+`mode` has a fourth value, `off`, and it is not a degree of the other three.
+There is no assistant at all: the reviewer gets the briefing on screen and a
+form, and no request is ever made to Anthropic.
+
+- It lives in the same field as the three assistant modes because "how does the
+  assistant behave here" is the question somebody is asking when they reach for
+  that setting, and "it does not" is a real answer to it.
+- `/api/chat` refuses with a 404 when the mode is off. The reviewer is served a
+  form rather than a chat so nothing in the browser calls it -- but a route that
+  can be called directly has to enforce the setting itself, or "no requests are
+  made to Anthropic" is a claim about the UI rather than about the application.
+- **The panel is a brief and then a form, in that order.** A feedback box on its
+  own collects "looks good". The scenario, the tasks and the criteria are what
+  give somebody something specific to react to, which is the whole reason this
+  beats an email asking for thoughts.
+- The not-built list is shown to the reviewer here, which it is not in an
+  assistant review. With an assistant it answers "is that broken or just
+  unfinished?" as the question arises; with nobody to ask, saying it up front is
+  what stops a reviewer spending their attention on a button that was never
+  going to work.
+- Every section of the brief disappears when it is empty rather than showing a
+  heading with nothing under it.
+- **The role picker is hidden.** Role only steers what the assistant asks about
+  and nothing else reads it, so with no assistant it is a question whose answer
+  reaches nobody. The action still defaults it to "other".
+- `ReviewSummary` -- the finish screen and the download -- is shared with the
+  assistant panel rather than copied, because a review ends the same way whether
+  or not anyone was talking. It lives in its own module so a page with no chat
+  does not import the chat machinery to get it.
+- Ticking a task off is *not* here. That needs a `task_result` table and belongs
+  with the rest of the assistant's hands, so for now the tasks are a read-only
+  list and completion is reported in the feedback like anything else.
+
 ## The assistant's voice
 
 `prompts/assistant.md` is now the real personality file, not a placeholder. It

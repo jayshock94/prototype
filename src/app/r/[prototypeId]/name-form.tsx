@@ -29,11 +29,17 @@ function SubmitButton() {
 export function NameForm({
   prototypeId,
   reviewerNames,
+  askRole,
 }: {
   prototypeId: string;
   reviewerNames: string[];
+  /** False on a prototype with no assistant, where the answer goes unread. */
+  askRole: boolean;
 }) {
-  const [state, formAction] = useActionState<NameState, FormData>(enterName, {});
+  const [state, formAction] = useActionState<NameState, FormData>(
+    enterName,
+    {},
+  );
   const [choice, setChoice] = useState("");
   /*
    * Defaults to "other" rather than to nothing. A required picker with no
@@ -81,22 +87,24 @@ export function NameForm({
         />
       ) : null}
 
-      <div className="flex flex-col gap-1">
-        <Select
-          id="reviewerRole"
-          name="reviewerRole"
-          label="What are you looking at this as?"
-          value={role}
-          onChange={(event) => setRole(event.target.value as ReviewerRole)}
-          supportingText={ROLE_HINTS[role]}
-        >
-          {REVIEWER_ROLES.map((option) => (
-            <option key={option} value={option}>
-              {ROLE_LABELS[option]}
-            </option>
-          ))}
-        </Select>
-      </div>
+      {askRole ? (
+        <div className="flex flex-col gap-1">
+          <Select
+            id="reviewerRole"
+            name="reviewerRole"
+            label="What are you looking at this as?"
+            value={role}
+            onChange={(event) => setRole(event.target.value as ReviewerRole)}
+            supportingText={ROLE_HINTS[role]}
+          >
+            {REVIEWER_ROLES.map((option) => (
+              <option key={option} value={option}>
+                {ROLE_LABELS[option]}
+              </option>
+            ))}
+          </Select>
+        </div>
+      ) : null}
 
       {state.error ? (
         <p className="px-4 text-body-small text-error">{state.error}</p>
