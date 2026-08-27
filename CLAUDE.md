@@ -142,9 +142,18 @@ writing one-off styled elements, so later chunks stay consistent.
 - `src/lib/password.ts`       Reviewer password hashing (PBKDF2 via Web Crypto)
 - `src/lib/prototype-storage.ts`  Everything to do with Vercel Blob
 - `src/lib/env.ts`            Reads and validates environment variables
+- `src/lib/reviewer-names.ts` Parses the one-name-per-line reviewer textarea
 - `src/app/p/[versionId]/`    Serves prototype HTML on our own origin
 - `src/app/r/[prototypeId]/`  Reviewer entry, and the review page
-- `middleware.ts`             Protects every /admin route except /admin/login
+- `src/app/admin/(dashboard)/[prototypeId]/edit/`  Editing an existing prototype
+- `src/middleware.ts`         Protects every /admin route except /admin/login.
+                              **Must stay next to `src/app`.** It used to sit at
+                              the repository root, where Next.js never looked --
+                              which left the whole admin area open to anyone with
+                              the URL, silently, with no error in the logs.
+                              Next 16 also warns that the file convention is
+                              being renamed to `proxy.ts`; still works, but worth
+                              doing before the next Next.js upgrade.
 - `drizzle/`                  Generated SQL migrations, committed to the repo
 
 ## Uploads
@@ -170,12 +179,39 @@ writing one-off styled elements, so later chunks stay consistent.
   belongs in React state rather than in the input -- that is why the prototype
   file input has no `name`.
 
+## Editing a prototype
+
+`/admin/[prototypeId]/edit` changes a prototype that already exists. It is the
+same four sections as the create form, so the two read as one screen twice.
+Three rules are worth knowing:
+
+- **The reviewer password is only rewritten when a new one is typed.** Leaving
+  that field blank keeps the existing hash, so fixing a typo in the description
+  can never lock reviewers out by accident. Changing it does not kick out a
+  reviewer who is already through the password step -- their pass cookie lasts
+  until they close the browser, or eight hours, whichever is sooner.
+- **The knowledge base belongs to the version, not the prototype**, so the edit
+  form writes it to whichever version has `is_current`. Older versions keep the
+  knowledge base they were actually reviewed against, which is what you want
+  when you go back and read old feedback.
+- **The prototype id is bound to the server action, not posted as a hidden
+  field.** Next encrypts bound arguments, so the browser cannot rewrite it to
+  point a save at some other prototype.
+
+Replacing the HTML is deliberately *not* here. That is a new version rather than
+an edit of this row, and it needs a label, a change note and a move of
+`is_current` -- there is a TODO in `edit/actions.ts` describing the shape.
+
 ## Build progress
 Built so far: chunks 1 (foundation), 2 (upload and same-origin serving),
-3 (reviewer entry and prototype render) and 4 (the assistant).
-Next up: chunk 5 (feedback capture and admin review) -- the shippable
-checkpoint, after which the plan says to stop and put a real prototype through
-it before building anything else.
+3 (reviewer entry and prototype render), 4 (the assistant), and admin editing
+(`/admin/[prototypeId]/edit`).
+
+The plan then changed direction: the assistant's job is being narrowed to
+explaining what a prototype is for, and the feedback side to collecting
+structured responses. Admin editing is the first chunk of that work -- without
+it a prototype's description and knowledge base were write-once, which makes
+iterating on either impossible.
 
 ## Note on real prototypes
 The first real prototype put through this marks its screens with
@@ -184,3 +220,13 @@ as a bundled app rather than plain show/hide divs. Screen detection in chunk 6
 should accept both attributes, and should wait for the framed document to
 finish rendering rather than reading it on load -- the content appears a
 second or so after the iframe fires `load`.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->
