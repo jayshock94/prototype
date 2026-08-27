@@ -5,7 +5,7 @@ import { notFound } from "next/navigation";
 import { ButtonLink } from "@/components/m3/button";
 import { CopyLink } from "@/components/m3/copy-link";
 import { Card } from "@/components/m3/card";
-import { OpenInNewIcon } from "@/components/m3/icons";
+import { EditIcon, OpenInNewIcon } from "@/components/m3/icons";
 import { getDb } from "@/db";
 import { prototype, version } from "@/db/schema";
 
@@ -74,17 +74,27 @@ export default async function PrototypeDetailPage({
           </p>
         </div>
 
-        {current ? (
+        <div className="flex flex-wrap items-center gap-2">
           <ButtonLink
-            href={`/p/${current.id}`}
-            target="_blank"
-            rel="noreferrer"
-            variant="filled"
-            icon={<OpenInNewIcon className="size-[18px]" />}
+            href={`/admin/${row.id}/edit`}
+            variant="outlined"
+            icon={<EditIcon className="size-[18px]" />}
           >
-            Open {current.label}
+            Edit
           </ButtonLink>
-        ) : null}
+
+          {current ? (
+            <ButtonLink
+              href={`/p/${current.id}`}
+              target="_blank"
+              rel="noreferrer"
+              variant="filled"
+              icon={<OpenInNewIcon className="size-[18px]" />}
+            >
+              Open {current.label}
+            </ButtonLink>
+          ) : null}
+        </div>
       </div>
 
       {row.description ? (

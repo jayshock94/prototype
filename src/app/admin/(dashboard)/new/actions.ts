@@ -35,8 +35,8 @@ import {
   pathnameBelongsToPrototype,
   readPrototypeHead,
 } from "@/lib/prototype-storage";
+import { parseReviewerNames } from "@/lib/reviewer-names";
 import { looksLikeHtml } from "./looks-like-html";
-import { parseReviewerNames } from "./parse-reviewer-names";
 
 export type NewPrototypeState = {
   error?: string;
