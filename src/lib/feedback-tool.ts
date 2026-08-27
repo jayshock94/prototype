@@ -1,10 +1,15 @@
 /**
- * The tool that lets the assistant record feedback.
+ * The tool that lets the assistant propose feedback.
  *
- * This is the mechanism behind the one thing chunk 5 is for: a reviewer should
- * never have to stop reviewing, decide "this bit is feedback", and copy it into
- * a form. They describe what they found, in the same sentence they would say it
- * out loud, and it lands in the database.
+ * A reviewer should never have to stop reviewing, decide "this bit is
+ * feedback", and copy it into a form. They describe what they found, in the
+ * same sentence they would say it out loud, and a draft appears under it.
+ *
+ * It is a *proposal*, not a write. prompts/assistant.md is explicit that
+ * nothing is saved without the reviewer saying so: a bot that logs things
+ * people did not mean to say is worse than one that logs nothing, because Jay
+ * reads these and acts on them. So the tool returns a card, and the Save button
+ * on that card is what actually writes a row.
  *
  * The schema below is not just a data shape -- it is instructions. Claude reads
  * every description in it, so the wording of each field is doing as much work
@@ -15,7 +20,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 
 import { SEVERITIES, SEVERITY_DESCRIPTIONS } from "@/lib/feedback";
 
-export const RECORD_FEEDBACK = "record_feedback";
+export const PROPOSE_FEEDBACK = "propose_feedback";
 
 /**
  * Severity descriptions, rendered into the shape the tool schema wants.
@@ -28,29 +33,34 @@ const severityGuidance = SEVERITIES.map(
   (s) => `"${s}": ${SEVERITY_DESCRIPTIONS[s]}`,
 ).join(" ");
 
-export const recordFeedbackTool: Anthropic.Tool = {
-  name: RECORD_FEEDBACK,
+export const proposeFeedbackTool: Anthropic.Tool = {
+  name: PROPOSE_FEEDBACK,
   description: [
-    "Record one piece of feedback from the reviewer.",
+    "Propose one piece of feedback from the reviewer.",
     "",
-    "Call this as soon as the reviewer describes something that is wrong,",
+    "This does NOT save anything. It puts a draft card in front of the",
+    "reviewer, and they save it, change how serious it is, or throw it away.",
+    "Nothing reaches Jay until they have said so.",
+    "",
+    "Call it as soon as the reviewer describes something that is wrong,",
     "missing, confusing, or that they would want changed -- including when they",
-    "say it in passing while asking about something else. Do not wait to be",
-    "asked to log it, and do not ask permission first. The reviewer can see and",
-    "delete anything you record, so recording something they did not mean is",
-    "cheap and missing something they did mean is not.",
+    "say it in passing while asking about something else. Do not ask permission",
+    "first and do not ask \"shall I log that?\": propose it and carry on talking.",
+    "The card is the question.",
     "",
     "Call it once per distinct point. If they raise three problems in one",
     "message, call it three times.",
     "",
-    "Do NOT call it when the reviewer is only asking a question, when they are",
-    "saying something works, or to record a point you have already recorded in",
-    "this conversation.",
+    "Write it in the reviewer\'s words, not yours. They are about to read it",
+    "back and decide whether it is what they meant, so a tidied-up version of",
+    "what they said is harder to recognise than the thing they actually said.",
     "",
-    "If you are missing the detail for a field, leave it out and record what you",
-    "do have rather than interrogating the reviewer first. You can ask a",
-    "follow-up afterwards and record a second, fuller item if it turns out to",
-    "matter.",
+    "Do NOT call it when the reviewer is only asking a question, when they are",
+    "saying something works, or to propose a point you have already proposed or",
+    "that is already in the recorded list.",
+    "",
+    "If you are missing the detail for a field, leave it out and propose what",
+    "you do have rather than interrogating the reviewer first.",
   ].join("\n"),
   input_schema: {
     type: "object",
@@ -58,12 +68,12 @@ export const recordFeedbackTool: Anthropic.Tool = {
       happened: {
         type: "string",
         description:
-          "What the reviewer says actually happens, in their own words as far as possible. This is the most important field.",
+          "What the reviewer says actually happens, in their own words as far as possible.",
       },
       expected: {
         type: "string",
         description:
-          "What the reviewer expected to happen instead. Omit if they did not say.",
+          "What the reviewer expected to happen instead. This is the single most valuable thing in a review -- the gap between what someone expected and what they got is what Jay is reading for. If they have not said it and it is not obvious, ask before you propose.",
       },
       note: {
         type: "string",
@@ -73,7 +83,7 @@ export const recordFeedbackTool: Anthropic.Tool = {
       screen_id: {
         type: "string",
         description:
-          "Which screen or part of the prototype this is about, as the reviewer named it. Omit if they did not say -- do not guess.",
+          "Which screen or part of the prototype this is about, as the reviewer named it. You cannot see their screen, so omit this unless they said it. Never guess.",
       },
       severity: {
         type: "string",

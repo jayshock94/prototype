@@ -21,6 +21,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { MODE_DESCRIPTIONS, type AssistantMode } from "@/lib/briefing";
+import { ROLE_INSTRUCTIONS, ROLE_LABELS, type ReviewerRole } from "@/lib/reviewer-role";
 
 /**
  * Read once per server instance rather than per message.
@@ -75,6 +76,9 @@ export interface PrototypeContext {
   notBuilt: string[];
   /** How hard to push. See prompts/assistant.md for what each one means. */
   mode: AssistantMode;
+  /** Who is reviewing, and what they are here as. */
+  reviewerName: string;
+  reviewerRole: ReviewerRole;
   /** The situation to set up in the opening, when there is one. */
   scenario: string | null;
   tasks: ContextTask[];
@@ -105,6 +109,19 @@ export async function buildSystemPrompt(context: PrototypeContext): Promise<stri
     ]
       .filter(Boolean)
       .join("\n"),
+  );
+
+  parts.push(
+    [
+      "# Who you are talking to",
+      "",
+      `${context.reviewerName}, here as: ${ROLE_LABELS[context.reviewerRole]}.`,
+      "",
+      ROLE_INSTRUCTIONS[context.reviewerRole],
+      "",
+      "This changes what you ask about. It does not change how hard you push,",
+      "which is the mode below.",
+    ].join("\n"),
   );
 
   // The mode, in the assistant's own vocabulary rather than as a bare word.
@@ -244,5 +261,72 @@ export async function buildSystemPrompt(context: PrototypeContext): Promise<stri
         ].join("\n"),
   );
 
+  parts.push(capabilities());
+
   return parts.join("\n\n---\n\n");
 }
+
+/* --------------------------------------------------------------------------
+ * What the assistant can actually see and do, right now.
+ *
+ * prompts/assistant.md deliberately does not list these. That file is written
+ * once and edited by hand; this list changes every time a chunk lands, and a
+ * hand-written capability list is a promise that goes stale silently. An
+ * assistant that believes it can highlight an element will offer to, and the
+ * reviewer will wait for something that never happens.
+ *
+ * So the file points here, and this is generated from what is wired up. When a
+ * later chunk adds screen awareness or the highlight tool, the lines move from
+ * one list to the other and the prompt is correct the same day.
+ * ------------------------------------------------------------------------ */
+function capabilities(): string {
+  // One entry per bullet. Deliberately not wrapped in the source: a string
+  // broken across lines for readability becomes several bullets in the prompt,
+  // and a list where half the items are sentence fragments reads as noise.
+  const canSee = [
+    "Everything in the sections above: what this prototype is, its mode, who is reviewing and as what, the tasks, the criteria, what is deliberately not built, and everything already saved this session.",
+    "The conversation itself.",
+  ];
+
+  const cannotSee = [
+    "Which screen the reviewer is on, or anything on it. You cannot see the prototype at all.",
+    "Where they have been, how long they have been there, or what they have clicked.",
+    "Anything they have selected or pointed at.",
+  ];
+
+  const canDo = [
+    "Propose a feedback item. The reviewer sees it as a draft and saves or discards it.",
+  ];
+
+  const cannotDo = [
+    "Mark a task done, or record a verdict on an acceptance criterion. You can still talk about both, and anything they say about one is worth proposing as feedback.",
+    "Highlight or point at anything in the prototype.",
+    "Write the closing summary. The reviewer gets a report built from what they saved.",
+  ];
+
+  return [
+    "# What you can see and do right now",
+    "",
+    "This list is generated from the running code. It is the truth, and it beats",
+    "anything you assume.",
+    "",
+    "You can see:",
+    ...canSee.map((line) => `- ${line}`),
+    "",
+    "You cannot see:",
+    ...cannotSee.map((line) => `- ${line}`),
+    "",
+    "Because you cannot see the screen, ask which one they mean when it matters,",
+    "and never guess a screen name when you propose something. Ask once, plainly,",
+    "then move on.",
+    "",
+    "You can:",
+    ...canDo.map((line) => `- ${line}`),
+    "",
+    "You cannot yet:",
+    ...cannotDo.map((line) => `- ${line}`),
+    "",
+    "Do not promise any of these are coming. Say what you can do instead.",
+  ].join("\n");
+}
+

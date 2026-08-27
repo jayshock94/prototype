@@ -109,6 +109,25 @@ export interface FeedbackItem {
 }
 
 /**
+ * A proposal the reviewer has not agreed to yet.
+ *
+ * The same shape as a saved item minus the database id, because there is no
+ * row: the assistant put a card up and the reviewer has not pressed Save. The
+ * id it does carry is invented by the server for this card alone, so the panel
+ * has something to key on and so Save knows which draft it is saving. It is
+ * deliberately named differently from `id`, so nothing can pass a draft to
+ * something expecting a saved row and have it typecheck.
+ */
+export interface FeedbackDraft {
+  draftId: string;
+  screenId: string | null;
+  expected: string | null;
+  happened: string | null;
+  note: string | null;
+  severity: Severity;
+}
+
+/**
  * A one-line summary of an item, for places too tight for the full card.
  *
  * Falls back through the fields in the order that carries the most meaning:

@@ -15,6 +15,13 @@
       "when": 1787854890763,
       "tag": "0001_rich_sally_floyd",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787856090672,
+      "tag": "0002_awesome_vector",
+      "breakpoints": true
     }
   ]
 }

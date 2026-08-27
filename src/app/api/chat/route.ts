@@ -32,9 +32,9 @@ import { anthropicApiKey, hasAnthropicApiKey } from "@/lib/env";
 import {
   cleanField,
   isSeverity,
-  type FeedbackItem,
+  type FeedbackDraft,
 } from "@/lib/feedback";
-import { RECORD_FEEDBACK, recordFeedbackTool } from "@/lib/feedback-tool";
+import { PROPOSE_FEEDBACK, proposeFeedbackTool } from "@/lib/feedback-tool";
 import {
   hasValidPass,
   passCookieName,
@@ -88,7 +88,7 @@ export async function POST(request: Request) {
     );
   }
 
-  let payload: { prototypeId?: unknown; message?: unknown };
+  let payload: { prototypeId?: unknown; message?: unknown; opening?: unknown };
   try {
     payload = await request.json();
   } catch {
@@ -98,14 +98,25 @@ export async function POST(request: Request) {
   const prototypeId = String(payload.prototypeId ?? "");
   const text = String(payload.message ?? "").trim();
 
+  /**
+   * The assistant speaking first.
+   *
+   * prompts/assistant.md opens the session in four lines, which means the
+   * first turn has no reviewer message to answer. The panel asks for one of
+   * these when it loads into an empty conversation.
+   */
+  const opening = payload.opening === true;
+
   if (!UUID.test(prototypeId)) {
     return NextResponse.json({ error: "Bad request." }, { status: 400 });
   }
-  if (!text) {
-    return NextResponse.json({ error: "Say something first." }, { status: 400 });
-  }
-  if (text.length > MAX_MESSAGE_CHARS) {
-    return NextResponse.json({ error: "That message is too long." }, { status: 400 });
+  if (!opening) {
+    if (!text) {
+      return NextResponse.json({ error: "Say something first." }, { status: 400 });
+    }
+    if (text.length > MAX_MESSAGE_CHARS) {
+      return NextResponse.json({ error: "That message is too long." }, { status: 400 });
+    }
   }
 
   // --- Who is asking -------------------------------------------------------
@@ -141,6 +152,8 @@ export async function POST(request: Request) {
       name: prototype.name,
       description: prototype.description,
       mode: prototype.mode,
+      reviewerName: session.reviewerName,
+      reviewerRole: session.reviewerRole,
     })
     .from(session)
     .innerJoin(version, eq(version.id, session.versionId))
@@ -203,6 +216,8 @@ export async function POST(request: Request) {
     notBuilt: notBuiltRows.map((r) => r.text),
     mode: context.mode,
     scenario: context.scenario,
+    reviewerName: context.reviewerName,
+    reviewerRole: context.reviewerRole,
     tasks: taskRows,
     criteria: criterionRows,
     recorded: alreadyRecorded.map((r) => ({
@@ -229,63 +244,81 @@ export async function POST(request: Request) {
     .reverse()
     .map((row) => ({ role: row.role, content: row.content }));
 
+  /*
+   * An opening is only an opening once. If anything has already been said in
+   * this session, a request claiming otherwise is a stale tab or a reload
+   * racing itself, and answering it would put a second greeting into the
+   * middle of a conversation.
+   */
+  if (opening && history.length > 0) {
+    return NextResponse.json({ error: "Already started." }, { status: 409 });
+  }
+
+  /*
+   * The turn the model is answering.
+   *
+   * For an opening there is no reviewer message, so it gets a stage direction
+   * instead. That direction is never written to the transcript and never shown
+   * to anyone: the reviewer sees a conversation that begins with the assistant
+   * talking, which is the point.
+   */
+  const turn = opening
+    ? "[The reviewer has just opened the prototype and has not said anything yet. Open the session, following the Opening section of your instructions. Do not mention this note.]"
+    : text;
+
   // Persist the reviewer's message before calling out, so it is not lost if
-  // the API call fails.
-  await db.insert(message).values({ sessionId, role: "user", content: text });
+  // the API call fails. An opening has no reviewer message to persist.
+  if (!opening) {
+    await db.insert(message).values({ sessionId, role: "user", content: text });
+  }
 
   const client = new Anthropic({ apiKey: anthropicApiKey() });
 
   const encoder = new TextEncoder();
 
   /**
-   * Write one feedback row and hand back what the browser needs to draw it.
+   * Turn a tool call into a draft the reviewer can look at.
    *
-   * Everything here is untrusted: the fields come from a model, so they get the
-   * same trimming and validation as anything typed into a form. An unusable
-   * call returns null and is reported back to Claude as an error rather than
-   * being written as an empty row.
+   * Nothing is written here. prompts/assistant.md is explicit that a reviewer
+   * confirms before anything is saved, so this validates the call, gives it an
+   * id the browser can key on, and hands it back. The Save button on the card
+   * is what writes a row, through /api/feedback, which validates it all over
+   * again -- a draft that reaches the database has been checked twice and
+   * agreed to once.
+   *
+   * Everything in it is untrusted: the fields come from a model, so they get
+   * the same trimming as anything typed into a form. An unusable call returns
+   * null and is reported back to Claude as an error rather than becoming a
+   * card with nothing in it.
    */
-  async function record(input: unknown): Promise<FeedbackItem | null> {
+  function propose(input: unknown): FeedbackDraft | null {
     const raw = (input ?? {}) as Record<string, unknown>;
 
     const happened = cleanField(raw.happened);
     const expected = cleanField(raw.expected);
     const note = cleanField(raw.note);
 
-    // A row with nothing in any of the three text fields says nothing to
-    // anybody, so refuse it rather than filling the reviewer's list with
-    // blanks.
+    // A draft with nothing in any of the three text fields says nothing to
+    // anybody, so refuse it rather than showing the reviewer an empty card.
     if (!happened && !expected && !note) return null;
 
-    const [row] = await db
-      .insert(feedback)
-      .values({
-        sessionId: sessionId!,
-        screenId: cleanField(raw.screen_id),
-        happened,
-        expected,
-        note,
-        // The column has its own default, but being explicit means an
-        // unrecognised value from the model lands somewhere sensible instead
-        // of failing the insert against the Postgres enum.
-        severity: isSeverity(raw.severity) ? raw.severity : "minor",
-      })
-      .returning({
-        id: feedback.id,
-        screenId: feedback.screenId,
-        expected: feedback.expected,
-        happened: feedback.happened,
-        note: feedback.note,
-        severity: feedback.severity,
-      });
-
-    return row ?? null;
+    return {
+      // Not a database id -- there is no row yet. It exists so the panel can
+      // key the card and so Save knows which draft it is saving.
+      draftId: crypto.randomUUID(),
+      screenId: cleanField(raw.screen_id),
+      happened,
+      expected,
+      note,
+      severity: isSeverity(raw.severity) ? raw.severity : "minor",
+    };
   }
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       // Everything the assistant said this turn, prose only, for the
-      // transcript. Tool calls are recorded as feedback rows instead.
+      // transcript. Tool calls become draft cards instead, and only become
+      // rows if the reviewer saves them.
       let reply = "";
       let closed = false;
 
@@ -293,11 +326,11 @@ export async function POST(request: Request) {
        * One newline-delimited JSON object per event.
        *
        * Plain text was enough in chunk 4, when the only thing coming back was
-       * prose. Now a turn can also produce feedback rows, and the panel needs
+       * prose. Now a turn can also produce feedback drafts, and the panel needs
        * to tell them apart. Text chunks are JSON-encoded, so a newline inside
        * one cannot be mistaken for the end of an event.
        */
-      function emit(event: { t: "text"; v: string } | { t: "feedback"; v: FeedbackItem }) {
+      function emit(event: { t: "text"; v: string } | { t: "draft"; v: FeedbackDraft }) {
         if (closed) return;
         try {
           controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
@@ -313,7 +346,7 @@ export async function POST(request: Request) {
         // record is the message table and the feedback rows.
         const conversation: Anthropic.MessageParam[] = [
           ...history,
-          { role: "user", content: text },
+          { role: "user", content: turn },
         ];
 
         for (let round = 0; ; round += 1) {
@@ -342,7 +375,7 @@ export async function POST(request: Request) {
             // TUNE HERE: raise to "high" if answers feel shallow.
             thinking: { type: "adaptive" },
             output_config: { effort: "medium" },
-            tools: [recordFeedbackTool],
+            tools: [proposeFeedbackTool],
             messages: conversation,
           });
 
@@ -368,7 +401,7 @@ export async function POST(request: Request) {
           for (const block of final.content) {
             if (block.type !== "tool_use") continue;
 
-            if (block.name !== RECORD_FEEDBACK) {
+            if (block.name !== PROPOSE_FEEDBACK) {
               results.push({
                 type: "tool_result",
                 tool_use_id: block.id,
@@ -378,25 +411,25 @@ export async function POST(request: Request) {
               continue;
             }
 
-            const item = await record(block.input).catch(() => null);
+            const draft = propose(block.input);
 
-            if (!item) {
+            if (!draft) {
               results.push({
                 type: "tool_result",
                 tool_use_id: block.id,
                 is_error: true,
                 content:
-                  "Nothing was recorded: say at least what happened, what was expected, or add a note.",
+                  "Nothing was proposed: say at least what happened, what was expected, or add a note.",
               });
               continue;
             }
 
-            emit({ t: "feedback", v: item });
+            emit({ t: "draft", v: draft });
             results.push({
               type: "tool_result",
               tool_use_id: block.id,
               content:
-                "Recorded. The reviewer can see it and can change or delete it, so do not read it back to them in full -- one short line confirming what you logged is enough.",
+                "Proposed. The reviewer is looking at a draft card now and will save or discard it themselves. Do not read it back to them in full and do not ask them to confirm -- the card is the question. One short line naming what you put up is enough, then carry on.",
             });
           }
 
