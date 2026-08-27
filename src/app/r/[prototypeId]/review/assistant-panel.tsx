@@ -16,7 +16,12 @@ import {
   SparkIcon,
 } from "@/components/m3/icons";
 import { SeverityBadge } from "@/components/m3/severity-badge";
-import { SEVERITIES, summarise, type FeedbackItem } from "@/lib/feedback";
+import {
+  SEVERITIES,
+  summarise,
+  type FeedbackDraft,
+  type FeedbackItem,
+} from "@/lib/feedback";
 import type { Severity } from "@/db/schema";
 
 import { FeedbackCard } from "./feedback-card";
@@ -53,7 +58,14 @@ const STARTER_QUESTIONS = [
  */
 export type TimelineEntry =
   | { kind: "message"; id: string; role: "user" | "assistant"; content: string }
-  | { kind: "feedback"; id: string; item: FeedbackItem };
+  | { kind: "feedback"; id: string; item: FeedbackItem }
+  /**
+   * A card the assistant has put up that the reviewer has not agreed to.
+   * Nothing is in the database yet, so this lives only here: a refresh loses
+   * it, which is the correct behaviour -- an unanswered question is not a
+   * record of anything.
+   */
+  | { kind: "draft"; id: string; item: FeedbackDraft };
 
 /**
  * The assistant panel.
@@ -133,20 +145,55 @@ export function AssistantPanel({
     );
   }
 
-  async function send(preset?: string) {
-    const text = (preset ?? draft).trim();
-    if (!text || sending) return;
+  /*
+   * The assistant speaks first.
+   *
+   * Only into a genuinely empty conversation, and only once per mount. The ref
+   * is what stops React's development double-render asking for two greetings,
+   * and the server refuses a second one anyway -- but a refused request still
+   * puts an empty bubble on screen, so it is worth not making it.
+   *
+   * A reviewer who reloads mid-review has history, so this does nothing and
+   * they come back to the conversation they left.
+   */
+  const openingAsked = useRef(false);
 
-    if (!preset) setDraft("");
+  useEffect(() => {
+    if (openingAsked.current) return;
+    if (initialTimeline.length > 0) return;
+    openingAsked.current = true;
+    void send(undefined, { opening: true });
+    // Deliberately runs once on mount. send is recreated every render and
+    // depending on it would ask for a greeting after every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function send(preset?: string, options?: { opening?: boolean }) {
+    const opening = options?.opening === true;
+    const text = opening ? "" : (preset ?? draft).trim();
+    if ((!text && !opening) || sending) return;
+
+    if (!preset && !opening) setDraft("");
     setSending(true);
     setLogging(false);
 
     const stamp = Date.now();
     let replyId = `local-assistant-${stamp}`;
 
+    // An opening has no reviewer message, so only the assistant's bubble goes
+    // up. The reviewer arrives to something already being said to them.
     setTimeline((prev) => [
       ...prev,
-      { kind: "message", id: `local-user-${stamp}`, role: "user", content: text },
+      ...(opening
+        ? []
+        : [
+            {
+              kind: "message" as const,
+              id: `local-user-${stamp}`,
+              role: "user" as const,
+              content: text,
+            },
+          ]),
       { kind: "message", id: replyId, role: "assistant", content: "" },
     ]);
 
@@ -154,7 +201,7 @@ export function AssistantPanel({
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prototypeId, message: text }),
+        body: JSON.stringify({ prototypeId, message: text, opening }),
       });
 
       if (!response.ok || !response.body) {
@@ -191,15 +238,15 @@ export function AssistantPanel({
 
           if (event.t === "text" && typeof event.v === "string") {
             appendText(replyId, event.v);
-          } else if (event.t === "feedback" && event.v) {
-            const item = event.v as FeedbackItem;
-            // Show the receipt where it happened, then continue the reply in a
+          } else if (event.t === "draft" && event.v) {
+            const item = event.v as FeedbackDraft;
+            // Show the card where it happened, then continue the reply in a
             // fresh bubble underneath, so anything said after the tool call
             // does not appear above the thing it is talking about.
-            const nextId = `local-assistant-${Date.now()}-${item.id}`;
+            const nextId = `local-assistant-${Date.now()}-${item.draftId}`;
             setTimeline((prev) => [
               ...prev,
-              { kind: "feedback", id: item.id, item },
+              { kind: "draft", id: item.draftId, item },
               { kind: "message", id: nextId, role: "assistant", content: "" },
             ]);
             replyId = nextId;
@@ -238,6 +285,68 @@ export function AssistantPanel({
   }
 
   /** Log an item without going through the assistant. */
+  /**
+   * Save a draft the assistant proposed.
+   *
+   * Goes through the same /api/feedback the manual form uses, so a draft that
+   * reaches the database has been validated on the way out of the model and
+   * again on the way in. On success the draft card is swapped for the saved
+   * one in place, so the conversation does not reshuffle under the reviewer.
+   */
+  async function saveDraft(draftId: string) {
+    const entry = timeline.find(
+      (e): e is Extract<TimelineEntry, { kind: "draft" }> =>
+        e.kind === "draft" && e.id === draftId,
+    );
+    if (!entry) return;
+
+    setBusyItems((prev) => [...prev, draftId]);
+    try {
+      const response = await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prototypeId,
+          screenId: entry.item.screenId,
+          happened: entry.item.happened,
+          expected: entry.item.expected,
+          note: entry.item.note,
+          severity: entry.item.severity,
+        }),
+      });
+      if (!response.ok) return;
+
+      const { item } = (await response.json()) as { item: FeedbackItem };
+      setTimeline((prev) =>
+        prev.map((e) =>
+          e.kind === "draft" && e.id === draftId
+            ? { kind: "feedback", id: item.id, item }
+            : e,
+        ),
+      );
+    } finally {
+      setBusyItems((prev) => prev.filter((id) => id !== draftId));
+    }
+  }
+
+  /** Throw a draft away. Nothing was written, so nothing has to be undone. */
+  function discardDraft(draftId: string) {
+    setTimeline((prev) =>
+      prev.filter((e) => !(e.kind === "draft" && e.id === draftId)),
+    );
+  }
+
+  /** Change the severity on a draft, before it is saved. */
+  function setDraftSeverity(draftId: string, severity: FeedbackDraft["severity"]) {
+    setTimeline((prev) =>
+      prev.map((e) =>
+        e.kind === "draft" && e.id === draftId
+          ? { ...e, item: { ...e.item, severity } }
+          : e,
+      ),
+    );
+  }
+
   async function addManually(draftItem: Omit<FeedbackItem, "id">): Promise<boolean> {
     try {
       const response = await fetch("/api/feedback", {
@@ -373,11 +482,25 @@ export function AssistantPanel({
               ) : (
                 <ul className="flex flex-col gap-3">
                   {timeline.map((entry) =>
-                    entry.kind === "feedback" ? (
+                    entry.kind === "draft" ? (
+                      <li key={entry.id}>
+                        <p className="mb-1 flex items-center gap-1 text-label-medium text-primary">
+                          <FlagIcon className="size-4" />
+                          Is this right?
+                        </p>
+                        <FeedbackCard
+                          item={{ ...entry.item, id: undefined }}
+                          busy={busyItems.includes(entry.id)}
+                          onSeverityChange={(sev) => setDraftSeverity(entry.id, sev)}
+                          onDelete={() => discardDraft(entry.id)}
+                          onSave={() => void saveDraft(entry.id)}
+                        />
+                      </li>
+                    ) : entry.kind === "feedback" ? (
                       <li key={entry.id}>
                         <p className="mb-1 flex items-center gap-1 text-label-medium text-tertiary">
                           <CheckIcon className="size-4" />
-                          Logged
+                          Saved
                         </p>
                         <FeedbackCard
                           item={entry.item}

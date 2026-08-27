@@ -1,7 +1,8 @@
 "use client";
 
+import { Button } from "@/components/m3/button";
 import { IconButton } from "@/components/m3/icon-button";
-import { DeleteIcon, ExpandMoreIcon } from "@/components/m3/icons";
+import { CheckIcon, DeleteIcon, ExpandMoreIcon } from "@/components/m3/icons";
 import {
   SEVERITIES,
   SEVERITY_CLASSES,
@@ -11,31 +12,47 @@ import {
 import type { Severity } from "@/db/schema";
 
 /**
- * One recorded item, as the reviewer sees it.
+ * One feedback item, as the reviewer sees it. Two states.
  *
- * This is a receipt, not a form. It exists so a reviewer can glance at what was
- * captured from what they just said and carry on -- so the whole card has to be
- * readable without being read, which is why "expected" and "happened" are
- * labelled rather than run together into a sentence.
+ * A **draft** is what the assistant just proposed. Nothing has been written;
+ * the reviewer saves it or throws it away. It is drawn with a dashed edge and
+ * says plainly that it is not saved, because the whole point is that a card
+ * which has not been agreed to must never look like one that has.
  *
- * The two things they can change are the two things most likely to be wrong:
- * the severity Claude guessed, and whether the item should exist at all.
- * Everything else is what they said, and letting them rewrite it after the fact
- * turns a record of a review into a draft of one.
+ * A **saved** item is a receipt. It exists so a reviewer can glance at what was
+ * kept and carry on, which is why "expected" and "happened" are labelled rather
+ * than run together into a sentence.
+ *
+ * In both states the one thing they can change is the severity, because that
+ * is Claude's guess rather than their words. Everything else is what they
+ * said: a draft they do not recognise should be discarded and said again, not
+ * edited into shape.
  */
 export function FeedbackCard({
   item,
   onSeverityChange,
   onDelete,
+  onSave,
   busy = false,
 }: {
-  item: FeedbackItem;
+  item: FeedbackItem | (Omit<FeedbackItem, "id"> & { id?: undefined });
   onSeverityChange: (severity: Severity) => void;
+  /** Delete a saved item, or discard a draft. */
   onDelete: () => void;
+  /** Present only on a draft. Its presence is what makes this a draft. */
+  onSave?: () => void;
   busy?: boolean;
 }) {
+  const isDraft = Boolean(onSave);
+
   return (
-    <div className="rounded-md border border-outline-variant bg-surface-container px-3 py-2.5">
+    <div
+      className={
+        isDraft
+          ? "rounded-md border border-dashed border-primary bg-surface-container-low px-3 py-2.5"
+          : "rounded-md border border-outline-variant bg-surface-container px-3 py-2.5"
+      }
+    >
       <div className="flex items-start gap-2">
         <SeverityPicker
           value={item.severity}
@@ -52,7 +69,7 @@ export function FeedbackCard({
         )}
 
         <IconButton
-          aria-label="Delete this feedback"
+          aria-label={isDraft ? "Discard this draft" : "Delete this feedback"}
           onClick={onDelete}
           disabled={busy}
           className="-mr-1 -mt-1 size-8 text-on-surface-variant"
@@ -70,6 +87,25 @@ export function FeedbackCard({
         ) : null}
         {item.note ? <Line label="Note">{item.note}</Line> : null}
       </dl>
+
+      {/* Only on a draft. A saved item needs no footer -- it is already kept,
+          and a Save button on something already saved is a lie. */}
+      {isDraft ? (
+        <div className="mt-2.5 flex items-center gap-2 border-t border-outline-variant pt-2.5">
+          <Button
+            variant="filled"
+            onClick={onSave}
+            disabled={busy}
+            icon={<CheckIcon className="size-[18px]" />}
+            className="h-8 px-4"
+          >
+            {busy ? "Saving…" : "Save"}
+          </Button>
+          <p className="text-body-small text-on-surface-variant">
+            Not saved yet
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

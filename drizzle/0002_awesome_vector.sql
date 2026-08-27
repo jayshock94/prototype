@@ -1,0 +1,2 @@
+CREATE TYPE "public"."reviewer_role" AS ENUM('product_owner', 'developer', 'qa', 'designer', 'other');--> statement-breakpoint
+ALTER TABLE "session" ADD COLUMN "reviewer_role" "reviewer_role" DEFAULT 'other' NOT NULL;

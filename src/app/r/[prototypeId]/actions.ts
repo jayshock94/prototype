@@ -14,6 +14,7 @@ import { redirect } from "next/navigation";
 import { getDb } from "@/db";
 import { prototype, session, version } from "@/db/schema";
 import { verifyPassword } from "@/lib/password";
+import { isReviewerRole, type ReviewerRole } from "@/lib/reviewer-role";
 import {
   createPassToken,
   createSessionToken,
@@ -78,6 +79,7 @@ export async function enterName(
   const prototypeId = String(formData.get("prototypeId") ?? "");
   const choice = String(formData.get("reviewerName") ?? "").trim();
   const otherName = String(formData.get("otherName") ?? "").trim();
+  const roleRaw = String(formData.get("reviewerRole") ?? "");
 
   if (!UUID.test(prototypeId)) return { error: "That link is not valid." };
 
@@ -99,6 +101,10 @@ export async function enterName(
   }
   if (name.length > 100) return { error: "That name is too long." };
 
+  // The picker only offers the five. Anything else did not come from a person
+  // using the form, and "other" is the answer that assumes least about them.
+  const reviewerRole: ReviewerRole = isReviewerRole(roleRaw) ? roleRaw : "other";
+
   const db = getDb();
 
   // Always the version marked current. The /r/ link is permanent and follows
@@ -116,7 +122,7 @@ export async function enterName(
 
   const [created] = await db
     .insert(session)
-    .values({ versionId: live.id, reviewerName: name })
+    .values({ versionId: live.id, reviewerName: name, reviewerRole })
     .returning({ id: session.id });
 
   store.set(

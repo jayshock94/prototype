@@ -61,6 +61,25 @@ export const annotationKindEnum = pgEnum("annotation_kind", ["select", "point", 
 /** Who said it. Chunk 4. */
 export const messageRoleEnum = pgEnum("message_role", ["user", "assistant"]);
 
+/**
+ * What the reviewer is here as. Picked by them, after their name.
+ *
+ * This changes what the assistant asks about, never how hard it pushes -- that
+ * is the prototype's mode. A developer gets asked about the states that are not
+ * shown; a product owner gets asked whether it solves the problem. Same
+ * assistant, different questions.
+ *
+ * "other" is not a fallback for a missing answer. It is a real choice, and it
+ * means plain language and no ticket numbers.
+ */
+export const reviewerRoleEnum = pgEnum("reviewer_role", [
+  "product_owner",
+  "developer",
+  "qa",
+  "designer",
+  "other",
+]);
+
 /** How bad is it. Chunk 5. */
 export const severityEnum = pgEnum("severity", [
   "blocker",
@@ -236,6 +255,12 @@ export const session = pgTable(
       .notNull()
       .references(() => version.id, { onDelete: "cascade" }),
     reviewerName: text("reviewer_name").notNull(),
+    /**
+     * Defaults to "other", which is the safe answer: plain language and no
+     * jargon. Sessions that started before roles existed read as "other" too,
+     * which is exactly right -- nobody asked them.
+     */
+    reviewerRole: reviewerRoleEnum("reviewer_role").notNull().default("other"),
     startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
     /** Set when they press "finish review". Null means still in progress. */
     completedAt: timestamp("completed_at", { withTimezone: true }),
@@ -441,5 +466,6 @@ export type Message = typeof message.$inferSelect;
 export type Annotation = typeof annotation.$inferSelect;
 export type Feedback = typeof feedback.$inferSelect;
 export type AcResult = typeof acResult.$inferSelect;
+export type ReviewerRole = (typeof reviewerRoleEnum.enumValues)[number];
 export type Severity = (typeof severityEnum.enumValues)[number];
 export type Disposition = (typeof dispositionEnum.enumValues)[number];

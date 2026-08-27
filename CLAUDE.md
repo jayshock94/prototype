@@ -236,6 +236,7 @@ writing one-off styled elements, so later chunks stay consistent.
 - `src/lib/env.ts`            Reads and validates environment variables
 - `src/lib/reviewer-names.ts` Parses the one-name-per-line reviewer textarea
 - `src/lib/briefing.ts`       Mode wording, and reading the briefing out of the edit form
+- `src/lib/reviewer-role.ts`  The five roles, their wording, and what each changes
 - `src/app/p/[versionId]/`    Serves prototype HTML on our own origin
 - `src/app/r/[prototypeId]/`  Reviewer entry, and the review page
 - `src/app/admin/(dashboard)/[prototypeId]/edit/`  Editing an existing prototype
@@ -331,6 +332,60 @@ by `src/lib/assistant-context.ts`.
   is the classic bug here: delete the first of three rows and the remaining text
   appears to jump between fields.
 
+## The assistant's voice
+
+`prompts/assistant.md` is now the real personality file, not a placeholder. It
+decides who the assistant is and how it behaves, and it is the first thing to
+edit when the assistant is wrong. Remember it is read once per server instance,
+so a change needs a redeploy.
+
+- **The file never lists what the assistant can see or do.** That list is
+  generated in `assistant-context.ts` from what is actually wired up, and
+  appended. A hand-written capability list goes stale silently, and an
+  assistant that believes it can highlight an element will offer to, leaving
+  the reviewer waiting for something that never happens. When a later chunk
+  lands, lines move from the "cannot yet" list to the "can" list and the prompt
+  is right the same day.
+- **The assistant speaks first.** The panel asks for an opening when it loads
+  into an empty conversation. There is no reviewer message to answer, so the
+  model is given a stage direction that is never persisted and never shown --
+  the transcript starts with the assistant talking, which is the point. The
+  server refuses a second opening once anything has been said, so a reload
+  mid-review returns to the conversation rather than greeting you again.
+- **Role is picked after the name, and defaults to "None of these".** A
+  required picker with no default is one more thing between a reviewer and the
+  prototype, and "other" is the answer that assumes least: plain language, no
+  jargon. It changes what the assistant asks about, never how hard it pushes --
+  that is the prototype's mode.
+- Role wording lives in `src/lib/reviewer-role.ts` because the same sentences
+  are shown to the reviewer *and* given to the assistant. Two copies of one
+  instruction is two things to keep in step, and the one nobody reads is the
+  one that drifts.
+
+## Confirming feedback
+
+Chunk 5 saved immediately and offered an undo. The personality file overrides
+that: nothing is written until the reviewer says so.
+
+- The tool is `propose_feedback` and it **writes nothing**. It validates the
+  call, gives it an id for the browser to key on, and returns a card. The Save
+  button on that card is what writes the row, through `/api/feedback` -- the
+  same route the manual form uses, so anything reaching the database has been
+  validated on the way out of the model and again on the way in.
+- A draft lives only in the browser. A refresh loses it, and that is correct:
+  an unanswered question is not a record of anything.
+- A draft is drawn with a dashed edge and says "Not saved yet" in words. A card
+  that has not been agreed to must never look like one that has.
+- The reviewer can change the severity on a draft but not the wording. The
+  wording is what they said; a draft they do not recognise should be discarded
+  and said again rather than edited into shape.
+- The assistant is told not to ask "shall I log that?" and wait. It proposes
+  and carries on. **The card is the question.**
+- `# Already recorded this session` in the prompt is built from the feedback
+  table, so it lists saved items only. A discarded draft was never there, and
+  the assistant is free to propose the point again if the reviewer raises it
+  differently.
+
 ## Build progress
 Built so far: chunks 1 (foundation), 2 (upload and same-origin serving),
 3 (reviewer entry and prototype render), 4 (the assistant), 5 (feedback capture,
@@ -359,8 +414,8 @@ Remaining work, in dependency order:
 
 1. ~~**The briefing.**~~ Done. Mode, scenario, tasks, acceptance criteria and
    the not-built list are authored in the edit form and reach the assistant.
-2. **The new voice.** The personality file, a role picker after the name step,
-   and an opening message the assistant sends first.
+2. ~~**The new voice.**~~ Done. The personality file, the role picker, the
+   opening message, and confirm-before-save.
 3. **Eyes.** Screen detection in the framed prototype, plus the path through it.
    Timing is recorded because the "stalled" signal needs it, but never shown in
    the report -- order and revisits are what a human can act on.
