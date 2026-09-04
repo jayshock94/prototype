@@ -50,5 +50,15 @@ export async function setDisposition(
       ),
     );
 
-  revalidatePath(`/admin/${prototypeId}/feedback`);
+  /*
+   * The whole prototype's subtree, not just the feedback page.
+   *
+   * The picker is controlled by the server's value rather than local state, so
+   * without a revalidate covering the page it was used on it would snap back
+   * to the old label. It is used on two pages now -- the triage list and a
+   * single review -- and the untriaged count lives on the tab bar in the
+   * layout above both, so "layout" is the scope that actually matches what a
+   * triage changes.
+   */
+  revalidatePath(`/admin/${prototypeId}`, "layout");
 }

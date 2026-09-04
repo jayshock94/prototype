@@ -200,6 +200,34 @@ writing one-off styled elements, so later chunks stay consistent.
   way, so a reviewer who closes the tab without downloading has still been
   heard -- the file is a copy to send, not the only channel.
 
+## Getting around the admin area
+
+Everything about one prototype lives under `/admin/[prototypeId]`, and the
+layout at that level draws the name, a link back to the list, and a tab bar.
+Adding a page under that folder gives it the navigation for free, which is the
+reason it is a layout rather than a component each page has to remember.
+
+- **Four tabs: Overview, Reviews, Feedback, Settings.** They are links, not
+  buttons: a tab you can middle-click, bookmark and go back from is worth more
+  than one that keeps its state in a variable. `src/components/m3/tabs.tsx` is
+  a client component for exactly one reason -- `usePathname`, to know which tab
+  is the current page.
+- **The active tab is the longest matching href.** Every tab shares the same
+  prefix, so a plain `startsWith` lights up Overview everywhere. The longest
+  match also means `/reviews/[sessionId]` keeps Reviews lit, which is what a
+  person expects when they open one.
+- **The two badges count different kinds of thing.** Reviews shows how many
+  there are. Feedback shows how many are *untriaged*, because a badge that is
+  always lit stops meaning anything.
+- The app bar title is a link home. It is the first thing anybody clicks when
+  they want out of wherever they are.
+
+There is one trap in the badge query, commented where it is: the join to
+`feedback` has to be a LEFT join or a review that logged nothing drops out of
+the review count, and that in turn means an empty review produces a row with a
+null disposition. Testing the disposition alone counted every empty review as
+an untriaged finding -- "17 to triage" on a prototype with four.
+
 ## Admin review
 
 - `/admin/[prototypeId]/feedback` lists everything across all sessions, grouped
@@ -217,6 +245,73 @@ writing one-off styled elements, so later chunks stay consistent.
 - The page reads every row for the prototype and filters in memory. That is the
   right trade at one designer's scale; when it stops being, push the WHERE down
   and compute the filter counts with a GROUP BY.
+
+### Reviews, one at a time
+
+`/admin/[prototypeId]/reviews` lists visits, and `/reviews/[sessionId]` opens
+one in full. The Feedback tab answers "what needs fixing?"; this answers "what
+did this person make of it?", which is a different question and is why both
+exist rather than one being a filter of the other.
+
+- **A review that logged nothing still appears.** Somebody spending ten minutes
+  in there and raising nothing is a result, and it is invisible on a page that
+  only lists findings.
+- **Findings and conversation on one page.** "The totals were confusing" means
+  one thing alone and something much more specific with the four messages
+  around it. Findings first and worst-first, because that is what gets acted
+  on; the conversation underneath as evidence, which is the order the report
+  uses too.
+- The counts on the list are correlated subqueries, not joins. Joining both
+  `feedback` and `message` to `session` multiplies them -- three findings and
+  eight messages report twenty-four of each, silently, and it looks like a
+  busy reviewer.
+- Triage works here as well as on the Feedback tab, using the same control.
+  Reading an item in context is exactly when you know what to do with it.
+  `setDisposition` therefore revalidates the whole prototype subtree
+  (`revalidatePath(path, "layout")`), because the picker is controlled by the
+  server's value and the untriaged badge lives in the layout above both pages.
+
+### Downloading it
+
+`/api/admin/export` is the designer's copy, and it is a different document from
+the reviewer's.
+
+- `?prototypeId=` gives everything: every finding from every reviewer across
+  every version, pooled into one file with the name of whoever raised it and
+  your own triage beside it, the conversations at the back, and the screenshots
+  in a folder. `?sessionId=` as well gives one review -- byte for byte the file
+  that reviewer could have downloaded, which is the one to forward to a
+  developer.
+- Both use the same stylesheet as the reviewer's report, so the file you
+  download and the file they download read as two pages of one thing.
+- `collectShots` in `export-report.ts` is shared by both routes. "Which file is
+  this picture and what is it a picture of" should not have two answers.
+- **SECURITY: middleware guards `/admin`, not `/api`.** This route checks the
+  admin session itself, exactly like `/api/prototype-upload`. Without it, a
+  prototype id is all that stands between the internet and every reviewer's
+  feedback and every screenshot.
+
+## Deleting a prototype
+
+At the bottom of the Settings tab, and it is the only irreversible thing in the
+application.
+
+- **The counts are the confirmation, not the sentence.** "This cannot be
+  undone" is something everybody has learned to click past; "3 reviews and 14
+  findings" is a fact that stops the hand. They are shown even when they are
+  zero, because a prototype nobody has reviewed is exactly the one that is safe
+  to delete.
+- **The typed name is checked in the action, not only in the browser.** A
+  disabled button is a courtesy to the person, not a control on the request.
+- **The rows go first and the files second.** Postgres cascades handle every
+  table and Blob storage has no idea any of it happened, so the URLs are read
+  out *before* the delete and the files removed afterwards. The other order
+  leaves rows pointing at files that no longer exist -- a prototype that looks
+  fine in the list and 404s when you open it. A failed cleanup is deliberately
+  not reported: by then the prototype is gone, and telling somebody that a
+  deletion they cannot undo half-failed is alarming and unactionable.
+- Anything added later that writes to Blob has to be added to that collection
+  too. `deleteBlobs` takes a list precisely so there is one place to add it.
 
 ## Where things are
 - `src/db/schema.ts`          Drizzle schema, all tables from the data model above
@@ -243,8 +338,11 @@ writing one-off styled elements, so later chunks stay consistent.
 - `src/app/p/[versionId]/`    Serves prototype HTML on our own origin
 - `src/app/r/[prototypeId]/`  Reviewer entry, and the review page
 - `src/app/api/annotation/`   Recording a reference, and serving its picture
-- `src/app/admin/(dashboard)/[prototypeId]/edit/`  Editing an existing prototype
+- `src/app/admin/(dashboard)/[prototypeId]/layout.tsx`  The name, the way back, the tabs
+- `src/app/admin/(dashboard)/[prototypeId]/edit/`  Settings, and deleting the prototype
+- `src/app/admin/(dashboard)/[prototypeId]/reviews/`  One visit at a time, in full
 - `src/app/admin/(dashboard)/[prototypeId]/feedback/`  Reading and triaging feedback
+- `src/app/api/admin/export/`  The designer's download: everything, or one review
 - `src/middleware.ts`         Protects every /admin route except /admin/login.
                               **Must stay next to `src/app`.** It used to sit at
                               the repository root, where Next.js never looked --
@@ -536,7 +634,9 @@ now a real instruction with a button behind it.
 Built so far: chunks 1 (foundation), 2 (upload and same-origin serving),
 3 (reviewer entry and prototype render), 4 (the assistant), 5 (feedback capture,
 admin review and the reviewer's downloadable report), admin editing
-(`/admin/[prototypeId]/edit`), the briefing, the new voice, and the eyes.
+(`/admin/[prototypeId]/edit`), the briefing, the new voice, the eyes, and the
+admin area proper -- tabs, reviews read one at a time, a download for the
+designer, and deleting a prototype.
 
 ## Where this is going
 

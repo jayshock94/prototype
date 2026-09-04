@@ -286,3 +286,33 @@ export async function deletePrototypeBlob(blobUrl: string): Promise<void> {
     // came here to be told what was wrong with their upload.
   }
 }
+
+/**
+ * Remove many blobs at once, ignoring the ones that are already gone.
+ *
+ * This is the other half of deleting a prototype. Postgres cascades take care
+ * of every row, and take care of nothing in Blob storage -- delete a prototype
+ * with the cascade alone and its HTML and every screenshot stay in the store
+ * for ever, invisible, still costing money and still holding a copy of
+ * somebody's unreleased design.
+ *
+ * Failures are swallowed on purpose. This runs *after* the rows are gone, so a
+ * blob that will not delete is a file nothing points at any more; reporting it
+ * would tell the person that a deletion they can no longer undo had failed,
+ * which is both alarming and untrue.
+ */
+export async function deleteBlobs(blobUrls: Array<string | null>): Promise<void> {
+  const urls = blobUrls.filter((url): url is string => Boolean(url));
+  if (urls.length === 0) return;
+
+  // A handful at a time. A prototype with a hundred screenshots should not
+  // open a hundred simultaneous connections to the store.
+  const BATCH = 10;
+  for (let i = 0; i < urls.length; i += BATCH) {
+    await Promise.all(
+      urls.slice(i, i + BATCH).map((url) =>
+        del(url, { token: blobToken() }).catch(() => {}),
+      ),
+    );
+  }
+}

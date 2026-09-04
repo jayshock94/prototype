@@ -23,20 +23,16 @@ import { annotation, feedback, message, prototype, session, version } from "@/db
 import {
   buildReportHtml,
   buildReportMarkdown,
+  collectShots,
   exportFileName,
-  slug,
   type ExportData,
   type ExportItem,
-  type ExportShot,
 } from "@/lib/export-report";
 import { getAnnotationImage } from "@/lib/prototype-storage";
 import { currentReviewerSession } from "@/lib/reviewer-session";
 import { createZip } from "@/lib/zip";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** How many screenshots one export will carry. Past this, the words remain. */
-const MAX_SHOTS = 60;
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -120,7 +116,10 @@ export async function GET(request: Request) {
    * report, and a reviewer pressing download does not want to hear about our
    * storage.
    */
-  const shots = await collectShots(rows, { withBytes: !markdownOnly });
+  const shots = await collectShots(rows, {
+    withBytes: !markdownOnly,
+    read: getAnnotationImage,
+  });
 
   const items: ExportItem[] = rows.map((row) => ({
     id: row.id,
@@ -174,54 +173,4 @@ export async function GET(request: Request) {
       "Cache-Control": "no-store",
     },
   });
-}
-
-/**
- * Read every screenshot this session produced, keyed by the item it belongs to.
- *
- * Numbered in the order the items were logged, so the filenames sort the way
- * the report reads. The name carries the element label as well as the number
- * because `screenshots/03-continue-button.png` is a file somebody can find
- * again a week later and `03.png` is not.
- */
-async function collectShots(
-  rows: Array<{
-    id: string;
-    screenId: string | null;
-    annotationLabel: string | null;
-    annotationScreenId: string | null;
-    annotationBlobUrl: string | null;
-  }>,
-  { withBytes }: { withBytes: boolean },
-): Promise<Map<string, ExportShot>> {
-  const wanted = rows.filter((row) => row.annotationBlobUrl).slice(0, MAX_SHOTS);
-
-  const fetched = await Promise.all(
-    wanted.map(async (row, index) => {
-      const bytes = withBytes
-        ? await getAnnotationImage(row.annotationBlobUrl!)
-        : null;
-      // Only a fetch that was attempted and failed counts as missing. A report
-      // that was never going to carry the picture still says it exists.
-      if (withBytes && !bytes) return null;
-
-      const where = row.annotationScreenId ?? row.screenId;
-      const label = [row.annotationLabel ?? "the area they pointed at", where]
-        .filter(Boolean)
-        .join(" — ");
-
-      return [
-        row.id,
-        {
-          path: `screenshots/${String(index + 1).padStart(2, "0")}-${slug(
-            row.annotationLabel ?? where ?? "reference",
-          )}.png`,
-          label,
-          bytes,
-        },
-      ] as const;
-    }),
-  );
-
-  return new Map(fetched.filter((entry) => entry !== null));
 }

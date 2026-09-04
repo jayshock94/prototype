@@ -26,11 +26,12 @@
 import "server-only";
 
 import {
+  DISPOSITION_LABELS,
   SEVERITIES,
   SEVERITY_LABELS,
   type FeedbackItem,
 } from "@/lib/feedback";
-import type { Severity } from "@/db/schema";
+import type { Disposition, Severity } from "@/db/schema";
 
 /** One screenshot, as it goes into the archive. */
 export interface ExportShot {
@@ -237,6 +238,18 @@ p { margin: 0 0 10px; }
 }
 .item dd { margin: 0; white-space: pre-wrap; }
 
+.who { color: var(--muted); font-size: 13px; }
+.disp {
+  display: inline-block; padding: 2px 9px; border-radius: 999px;
+  font-size: 11px; border: 1px solid var(--line); color: var(--muted);
+  white-space: nowrap;
+}
+.review-head {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  margin: 26px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--rule);
+}
+.review-head h3 { font-size: 16px; margin: 0; }
+
 .shot { margin: 0 0 12px; }
 .shot img {
   display: block; max-width: 100%; height: auto;
@@ -403,6 +416,78 @@ ${itemsHtml}
 }
 
 /* --------------------------------------------------------------------------
+ * Screenshots
+ * ------------------------------------------------------------------------ */
+
+/** How many screenshots one export will carry. Past this, the words remain. */
+export const MAX_SHOTS = 60;
+
+/** One feedback row, as far as collecting its screenshot is concerned. */
+export interface ShotSource {
+  id: string;
+  screenId: string | null;
+  annotationLabel: string | null;
+  annotationScreenId: string | null;
+  annotationBlobUrl: string | null;
+}
+
+/**
+ * Read the screenshots a set of feedback rows point at, keyed by row id.
+ *
+ * Shared by the reviewer's own download and the admin's, because "which file
+ * is this picture, and what is it a picture of" should not have two answers.
+ *
+ * Numbered in the order the rows arrive, so the filenames sort the way the
+ * report reads, and named with the element's label because
+ * `screenshots/03-continue-button.png` is a file somebody can find again next
+ * week and `03.png` is not.
+ *
+ * `withBytes: false` collects the names without downloading anything. That is
+ * what the paste-as-text report wants: it says a screenshot exists without
+ * fetching a megabyte of PNG nobody will look at.
+ */
+export async function collectShots(
+  rows: ShotSource[],
+  {
+    withBytes,
+    read,
+  }: {
+    withBytes: boolean;
+    /** How to fetch one blob. Injected so this file needs no storage import. */
+    read: (blobUrl: string) => Promise<Buffer | null>;
+  },
+): Promise<Map<string, ExportShot>> {
+  const wanted = rows.filter((row) => row.annotationBlobUrl).slice(0, MAX_SHOTS);
+
+  const fetched = await Promise.all(
+    wanted.map(async (row, index) => {
+      const bytes = withBytes ? await read(row.annotationBlobUrl!) : null;
+      // Only a fetch that was attempted and failed counts as missing. A report
+      // that was never going to carry the picture still says it exists.
+      if (withBytes && !bytes) return null;
+
+      const where = row.annotationScreenId ?? row.screenId;
+      const label = [row.annotationLabel ?? "the area they pointed at", where]
+        .filter(Boolean)
+        .join(" — ");
+
+      return [
+        row.id,
+        {
+          path: `screenshots/${String(index + 1).padStart(2, "0")}-${slug(
+            row.annotationLabel ?? where ?? "reference",
+          )}.png`,
+          label,
+          bytes,
+        },
+      ] as const;
+    }),
+  );
+
+  return new Map(fetched.filter((entry) => entry !== null));
+}
+
+/* --------------------------------------------------------------------------
  * Markdown
  * ------------------------------------------------------------------------ */
 
@@ -479,6 +564,277 @@ export function buildReportMarkdown(
     for (const turn of data.transcript) {
       const who = turn.role === "user" ? data.reviewerName : "Assistant";
       lines.push(`**${who}:** ${turn.content}`, "");
+    }
+  }
+
+  lines.push("---", "", `Exported ${formatDateTime(now)} from the prototype review portal.`);
+
+  return `${lines.join("\n")}\n`;
+}
+
+/* --------------------------------------------------------------------------
+ * The whole prototype, for the designer
+ *
+ * The reviewer's report answers "what did I say?". This one answers "what did
+ * everybody say?", which is a different document and not the same one repeated
+ * four times. Findings from every review are pooled and ordered worst-first
+ * inside each version, each carrying the name of whoever said it; the
+ * conversations follow at the back as reference.
+ *
+ * It reuses the same stylesheet, so the file Jay downloads and the file a
+ * reviewer downloads look like two pages of one thing rather than two
+ * documents from two different applications.
+ * ------------------------------------------------------------------------ */
+
+export interface SummaryItem extends ExportItem {
+  reviewerName: string;
+  versionLabel: string;
+  /** Jay's own triage. Absent on anything he has not looked at yet. */
+  disposition: Disposition | null;
+}
+
+export interface SummaryReview {
+  reviewerName: string;
+  /** The role they picked, already worded for a person. */
+  role: string;
+  versionLabel: string;
+  startedAt: Date;
+  completedAt: Date | null;
+  transcript: ExportMessage[];
+  findings: number;
+}
+
+export interface SummaryData {
+  prototypeName: string;
+  ticket: string | null;
+  description: string | null;
+  reviews: SummaryReview[];
+  items: SummaryItem[];
+}
+
+/** `counteroffer-flow-all-feedback-2026-08-27.zip` */
+export function summaryFileName(data: SummaryData, now: Date): string {
+  return [slug(data.prototypeName), "all-feedback", now.toISOString().slice(0, 10)]
+    .join("-")
+    .concat(".zip");
+}
+
+/**
+ * Findings grouped by version, in the order the versions were given.
+ *
+ * Grouping happens before sorting, deliberately, and it is the same rule the
+ * admin feedback page follows: sort first and a blocker on a version nobody
+ * ships any more drags that whole version to the top of the page.
+ */
+function byVersion(items: SummaryItem[]): Array<[string, SummaryItem[]]> {
+  const groups = new Map<string, SummaryItem[]>();
+  for (const item of items) {
+    const group = groups.get(item.versionLabel);
+    if (group) group.push(item);
+    else groups.set(item.versionLabel, [item]);
+  }
+  return [...groups.entries()].map(([label, group]) => [
+    label,
+    [...group].sort(
+      (a, b) =>
+        SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity) ||
+        a.createdAt.getTime() - b.createdAt.getTime(),
+    ),
+  ]);
+}
+
+export function buildSummaryHtml(data: SummaryData, now: Date): string {
+  const budget = { left: MAX_INLINE_IMAGE_BYTES };
+  const counts = countsBySeverity(data.items);
+  const reviewers = [...new Set(data.reviews.map((r) => r.reviewerName))];
+
+  const meta = [
+    data.ticket ? ["Ticket", data.ticket] : null,
+    [
+      "Reviews",
+      `${data.reviews.length} from ${reviewers.length} ${
+        reviewers.length === 1 ? "person" : "people"
+      }`,
+    ],
+    reviewers.length > 0 ? ["Reviewers", reviewers.join(", ")] : null,
+    ["Findings", String(data.items.length)],
+  ].filter(Boolean) as Array<[string, string]>;
+
+  const groups = byVersion(data.items);
+
+  const findingsHtml =
+    data.items.length === 0
+      ? `<p class="empty">Nothing has been raised yet.</p>`
+      : groups
+          .map(
+            ([label, items]) => `
+  <h2>${esc(label)} — ${items.length} ${items.length === 1 ? "finding" : "findings"}</h2>
+  ${items
+    .map(
+      (item) => `
+    <article class="item">
+      <div class="item-head">
+        <span class="tag tag-${item.severity}">${esc(SEVERITY_LABELS[item.severity])}</span>
+        ${item.screenId ? `<span class="item-where">${esc(item.screenId)}</span>` : ""}
+        ${
+          item.disposition
+            ? `<span class="disp">${esc(DISPOSITION_LABELS[item.disposition])}</span>`
+            : ""
+        }
+        <span class="item-when">${esc(item.reviewerName)} · ${esc(formatDateTime(item.createdAt))}</span>
+      </div>
+      ${shotHtml(item, budget)}
+      <dl>
+        ${item.happened ? `<dt>Happened</dt><dd>${esc(item.happened)}</dd>` : ""}
+        ${item.expected ? `<dt>Expected</dt><dd>${esc(item.expected)}</dd>` : ""}
+        ${item.note ? `<dt>Note</dt><dd>${esc(item.note)}</dd>` : ""}
+      </dl>
+    </article>`,
+    )
+    .join("")}`,
+          )
+          .join("");
+
+  const conversationsHtml =
+    data.reviews.every((review) => review.transcript.length === 0)
+      ? `<p class="empty">No conversations. These reviews used the form rather than the assistant.</p>`
+      : data.reviews
+          .filter((review) => review.transcript.length > 0)
+          .map(
+            (review) => `
+  <div class="review-head">
+    <h3>${esc(review.reviewerName)}</h3>
+    <span class="who">${esc(review.role)} · ${esc(review.versionLabel)} · ${esc(formatDateTime(review.startedAt))}</span>
+  </div>
+  ${review.transcript
+    .map(
+      (turn) => `
+    <div class="turn turn-${turn.role === "user" ? "reviewer" : "assistant"}">
+      <p class="turn-who">${turn.role === "user" ? esc(review.reviewerName) : "Assistant"}</p>
+      <p class="turn-said">${esc(turn.content)}</p>
+    </div>`,
+    )
+    .join("")}`,
+          )
+          .join("");
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(data.prototypeName)} — all feedback</title>
+<style>${REPORT_CSS}</style>
+</head>
+<body>
+
+<h1>${esc(data.prototypeName)}</h1>
+<p class="sub">Everything reviewers have said, in one place</p>
+
+<dl class="meta">
+  ${meta.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join("\n  ")}
+</dl>
+
+${
+  counts.length > 0
+    ? `<ul class="tally">${counts
+        .map(
+          ([severity, n]) =>
+            `<li><span class="tag tag-${severity}">${esc(SEVERITY_LABELS[severity])}</span><b>${n}</b></li>`,
+        )
+        .join("")}</ul>`
+    : ""
+}
+
+${data.description ? `<h2>What this is</h2><p>${esc(data.description)}</p>` : ""}
+
+${findingsHtml}
+
+<section class="transcript">
+  <h2>Conversations</h2>
+  <p class="sub">What was said while reviewing. This is the context behind the findings above.</p>
+  ${conversationsHtml}
+</section>
+
+<footer>
+  Exported ${esc(formatDateTime(now))} from the prototype review portal.
+  To save this as a PDF, print the page and choose “Save as PDF” as the destination.
+</footer>
+
+</body>
+</html>`;
+}
+
+export function buildSummaryMarkdown(
+  data: SummaryData,
+  now: Date,
+  options: { archive: boolean } = { archive: false },
+): string {
+  const reviewers = [...new Set(data.reviews.map((r) => r.reviewerName))];
+  const counts = countsBySeverity(data.items);
+
+  const lines: string[] = [
+    `# ${data.prototypeName} — all feedback`,
+    "",
+    ...([
+      data.ticket ? `- **Ticket:** ${data.ticket}` : null,
+      `- **Reviews:** ${data.reviews.length} from ${reviewers.length} ${
+        reviewers.length === 1 ? "person" : "people"
+      }`,
+      reviewers.length > 0 ? `- **Reviewers:** ${reviewers.join(", ")}` : null,
+      `- **Findings:** ${data.items.length}`,
+    ].filter(Boolean) as string[]),
+    "",
+  ];
+
+  if (counts.length > 0) {
+    lines.push(counts.map(([s, n]) => `${SEVERITY_LABELS[s]}: ${n}`).join(" · "), "");
+  }
+
+  if (data.items.length === 0) {
+    lines.push("_Nothing has been raised yet._", "");
+  } else {
+    for (const [label, items] of byVersion(data.items)) {
+      lines.push(`## ${label} — ${items.length} ${items.length === 1 ? "finding" : "findings"}`, "");
+      for (const item of items) {
+        const where = item.screenId ? ` — ${item.screenId}` : "";
+        const triaged = item.disposition
+          ? ` (${DISPOSITION_LABELS[item.disposition]})`
+          : "";
+        lines.push(`### ${SEVERITY_LABELS[item.severity]}${where}${triaged}`, "");
+        lines.push(`_${item.reviewerName}, ${formatDateTime(item.createdAt)}_`, "");
+        if (item.shot) {
+          lines.push(
+            options.archive
+              ? `![${item.shot.label}](${item.shot.path})`
+              : `_Pointed at: ${item.shot.label}. There is a screenshot of it in the downloaded file._`,
+            "",
+          );
+        }
+        if (item.happened) lines.push(`**Happened:** ${item.happened}`, "");
+        if (item.expected) lines.push(`**Expected:** ${item.expected}`, "");
+        if (item.note) lines.push(`**Note:** ${item.note}`, "");
+      }
+    }
+  }
+
+  lines.push("## Conversations", "");
+
+  const talking = data.reviews.filter((review) => review.transcript.length > 0);
+  if (talking.length === 0) {
+    lines.push("_No conversations. These reviews used the form rather than the assistant._", "");
+  } else {
+    for (const review of talking) {
+      lines.push(
+        `### ${review.reviewerName} — ${review.versionLabel}`,
+        "",
+        `_${review.role}, ${formatDateTime(review.startedAt)}_`,
+        "",
+      );
+      for (const turn of review.transcript) {
+        const who = turn.role === "user" ? review.reviewerName : "Assistant";
+        lines.push(`**${who}:** ${turn.content}`, "");
+      }
     }
   }
 

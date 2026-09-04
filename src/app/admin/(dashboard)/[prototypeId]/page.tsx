@@ -5,7 +5,7 @@ import { notFound } from "next/navigation";
 import { ButtonLink } from "@/components/m3/button";
 import { CopyLink } from "@/components/m3/copy-link";
 import { Card } from "@/components/m3/card";
-import { EditIcon, FlagIcon, OpenInNewIcon } from "@/components/m3/icons";
+import { FlagIcon, OpenInNewIcon } from "@/components/m3/icons";
 import { getDb } from "@/db";
 import { MODE_DESCRIPTIONS, MODE_LABELS } from "@/lib/briefing";
 import { criterion, feedback, notBuilt, prototype, session, task, version } from "@/db/schema";
@@ -107,40 +107,6 @@ export default async function PrototypeDetailPage({
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <p className="text-label-medium text-on-surface-variant">
-            {row.ticket ?? "No ticket"}
-          </p>
-          <h1 className="text-headline-medium text-on-surface">{row.name}</h1>
-          <p className="mt-1 text-body-medium text-on-surface-variant">
-            Added {formatDate(row.createdAt)}
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <ButtonLink
-            href={`/admin/${row.id}/edit`}
-            variant="outlined"
-            icon={<EditIcon className="size-[18px]" />}
-          >
-            Edit
-          </ButtonLink>
-
-          {current ? (
-            <ButtonLink
-              href={`/p/${current.id}`}
-              target="_blank"
-              rel="noreferrer"
-              variant="filled"
-              icon={<OpenInNewIcon className="size-[18px]" />}
-            >
-              Open {current.label}
-            </ButtonLink>
-          ) : null}
-        </div>
-      </div>
-
       {row.description ? (
         <Card variant="filled" className="p-6">
           <p className="text-body-large whitespace-pre-line text-on-surface">
@@ -151,6 +117,8 @@ export default async function PrototypeDetailPage({
 
       <Card variant="outlined" className="p-6">
         <dl className="grid gap-6 sm:grid-cols-2">
+          <Detail label="Added">{formatDate(row.createdAt)}</Detail>
+
           <Detail label="Assistant mode">
             {MODE_LABELS[row.mode]}
             <p className="mt-2 text-body-small text-on-surface-variant">

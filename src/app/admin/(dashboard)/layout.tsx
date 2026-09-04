@@ -37,6 +37,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       <TopAppBar
         overline="Admin"
         title="Prototype Review Portal"
+        homeHref="/admin"
         actions={
           <form action={logout}>
             <IconButton type="submit" aria-label="Sign out">
