@@ -10,6 +10,7 @@
  * only how they are worded and ordered for people.
  */
 
+import type { AnnotationRef } from "@/lib/annotation";
 import type { Disposition, Severity } from "@/db/schema";
 
 /**
@@ -106,6 +107,15 @@ export interface FeedbackItem {
   happened: string | null;
   note: string | null;
   severity: Severity;
+  /**
+   * The thing in the prototype this item points at, when the reviewer pointed
+   * at one.
+   *
+   * Optional and usually absent. Most feedback is a sentence about a screen and
+   * needs no picture; the reference is for the case where saying which button
+   * takes longer than showing it.
+   */
+  annotation?: AnnotationRef | null;
 }
 
 /**

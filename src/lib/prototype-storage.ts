@@ -103,6 +103,74 @@ export async function putPrototypeHtml({
 }
 
 /**
+ * The size ceiling for one annotation screenshot.
+ *
+ * These DO travel through a function, unlike prototype HTML: the browser posts
+ * the PNG to /api/annotation and the server puts it in Blob. The direct-upload
+ * dance exists because a prototype can be tens of megabytes; a crop of one
+ * screen is a few hundred kilobytes, and a token round trip to save a fraction
+ * of a second is complexity bought for nothing.
+ *
+ * 3 MB keeps it comfortably under the 4.5 MB a Vercel function may receive,
+ * with room for the rest of the form. src/lib/element-capture.ts caps the
+ * picture it produces well below this, so anything reaching the limit is not
+ * a screenshot.
+ */
+export const MAX_ANNOTATION_IMAGE_BYTES = 3 * 1024 * 1024;
+
+/**
+ * Store one annotation's screenshot and return the URL to record on the row.
+ *
+ * Private, like everything else in the store. The only way to see it is through
+ * /api/annotation/[id]/image, which checks that the caller owns the review
+ * session it belongs to -- so a screenshot of somebody's unreleased design is
+ * not a URL away from being public.
+ */
+export async function putAnnotationImage({
+  sessionId,
+  data,
+}: {
+  sessionId: string;
+  data: Buffer;
+}): Promise<string> {
+  const result = await put(`annotations/${sessionId}/shot.png`, data, {
+    access: "private",
+    contentType: "image/png",
+    addRandomSuffix: true,
+    token: blobToken(),
+  });
+
+  return result.url;
+}
+
+/**
+ * Read one annotation's screenshot back as bytes.
+ *
+ * Bytes rather than a stream, because both callers need the whole thing in
+ * hand: the image route sends it in one response, and the export inlines it
+ * into an HTML file. Returns null when the blob is missing, which every caller
+ * turns into "no picture" rather than an error -- a report is still worth
+ * having when one image has gone astray.
+ */
+export async function getAnnotationImage(blobUrl: string): Promise<Buffer | null> {
+  const stream = await getBlobStream(blobUrl);
+  if (!stream) return null;
+
+  try {
+    const chunks: Uint8Array[] = [];
+    const reader = stream.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value as Uint8Array);
+    }
+    return Buffer.concat(chunks);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Turn a stored blob URL back into the blob's pathname.
  *
  * A Blob URL is `https://<store>.blob.vercel-storage.com/<pathname>`, so the
@@ -133,6 +201,11 @@ function pathnameFromBlobUrl(blobUrl: string): string | null {
 export async function getPrototypeHtmlStream(
   blobUrl: string,
 ): Promise<ReadableStream | null> {
+  return getBlobStream(blobUrl);
+}
+
+/** The same read, for anything else we have put in the store. */
+async function getBlobStream(blobUrl: string): Promise<ReadableStream | null> {
   const isBlobStoreUrl = (() => {
     try {
       return new URL(blobUrl).hostname.endsWith(".blob.vercel-storage.com");
@@ -211,5 +284,35 @@ export async function deletePrototypeBlob(blobUrl: string): Promise<void> {
   } catch {
     // A failed cleanup must never turn into the error the user sees -- they
     // came here to be told what was wrong with their upload.
+  }
+}
+
+/**
+ * Remove many blobs at once, ignoring the ones that are already gone.
+ *
+ * This is the other half of deleting a prototype. Postgres cascades take care
+ * of every row, and take care of nothing in Blob storage -- delete a prototype
+ * with the cascade alone and its HTML and every screenshot stay in the store
+ * for ever, invisible, still costing money and still holding a copy of
+ * somebody's unreleased design.
+ *
+ * Failures are swallowed on purpose. This runs *after* the rows are gone, so a
+ * blob that will not delete is a file nothing points at any more; reporting it
+ * would tell the person that a deletion they can no longer undo had failed,
+ * which is both alarming and untrue.
+ */
+export async function deleteBlobs(blobUrls: Array<string | null>): Promise<void> {
+  const urls = blobUrls.filter((url): url is string => Boolean(url));
+  if (urls.length === 0) return;
+
+  // A handful at a time. A prototype with a hundred screenshots should not
+  // open a hundred simultaneous connections to the store.
+  const BATCH = 10;
+  for (let i = 0; i < urls.length; i += BATCH) {
+    await Promise.all(
+      urls.slice(i, i + BATCH).map((url) =>
+        del(url, { token: blobToken() }).catch(() => {}),
+      ),
+    );
   }
 }

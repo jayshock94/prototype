@@ -19,13 +19,16 @@ import { asc, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { getDb } from "@/db";
-import { feedback, message, prototype, session, version } from "@/db/schema";
+import { annotation, feedback, message, prototype, session, version } from "@/db/schema";
 import {
   buildReportHtml,
   buildReportMarkdown,
+  collectShots,
   exportFileName,
   type ExportData,
+  type ExportItem,
 } from "@/lib/export-report";
+import { getAnnotationImage } from "@/lib/prototype-storage";
 import { currentReviewerSession } from "@/lib/reviewer-session";
 import { createZip } from "@/lib/zip";
 
@@ -74,7 +77,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "No review session." }, { status: 401 });
   }
 
-  const items = await db
+  const rows = await db
     .select({
       id: feedback.id,
       screenId: feedback.screenId,
@@ -83,8 +86,12 @@ export async function GET(request: Request) {
       note: feedback.note,
       severity: feedback.severity,
       createdAt: feedback.createdAt,
+      annotationLabel: annotation.label,
+      annotationScreenId: annotation.screenId,
+      annotationBlobUrl: annotation.screenshotBlobUrl,
     })
     .from(feedback)
+    .leftJoin(annotation, eq(annotation.id, feedback.annotationId))
     .where(eq(feedback.sessionId, reviewer.sessionId))
     .orderBy(asc(feedback.createdAt));
 
@@ -97,6 +104,33 @@ export async function GET(request: Request) {
     .from(message)
     .where(eq(message.sessionId, reviewer.sessionId))
     .orderBy(asc(message.createdAt));
+
+  /*
+   * The pictures.
+   *
+   * The bytes are fetched only for the archive: the copy-as-text button wants
+   * text, and downloading a dozen PNGs to produce a string nobody will see
+   * them in is work for nothing. It still learns that the pictures exist, so
+   * the pasted version can say so. A blob that has gone missing is skipped
+   * rather than failing the export -- a report one picture short is still the
+   * report, and a reviewer pressing download does not want to hear about our
+   * storage.
+   */
+  const shots = await collectShots(rows, {
+    withBytes: !markdownOnly,
+    read: getAnnotationImage,
+  });
+
+  const items: ExportItem[] = rows.map((row) => ({
+    id: row.id,
+    screenId: row.screenId,
+    expected: row.expected,
+    happened: row.happened,
+    note: row.note,
+    severity: row.severity,
+    createdAt: row.createdAt,
+    shot: shots.get(row.id) ?? null,
+  }));
 
   const now = new Date();
   const data: ExportData = { ...context, items, transcript };
@@ -113,7 +147,15 @@ export async function GET(request: Request) {
   const archive = createZip(
     [
       { name: "feedback.html", data: buildReportHtml(data, now) },
-      { name: "feedback.md", data: buildReportMarkdown(data, now) },
+      {
+        name: "feedback.md",
+        data: buildReportMarkdown(data, now, { archive: true }),
+      },
+      // The same pictures the HTML already carries inline, as real files. One
+      // is for reading the report, the other is for dragging into a ticket.
+      ...[...shots.values()].flatMap((shot) =>
+        shot.bytes ? [{ name: shot.path, data: shot.bytes }] : [],
+      ),
     ],
     now,
   );

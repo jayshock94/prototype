@@ -26,7 +26,9 @@ import type { Severity } from "@/db/schema";
 
 import { FeedbackCard } from "./feedback-card";
 import { FeedbackForm } from "./feedback-form";
+import { PendingReference, PointAtButton } from "./pointing";
 import { ReviewSummary } from "./review-summary";
+import type { Eyes } from "./review-workspace";
 
 /**
  * Starter questions shown before the reviewer has said anything.
@@ -106,6 +108,7 @@ export function AssistantPanel({
   configured,
   hasTasks,
   hasCriteria,
+  eyes,
 }: {
   prototypeId: string;
   initialTimeline: TimelineEntry[];
@@ -117,6 +120,8 @@ export function AssistantPanel({
   hasTasks: boolean;
   /** Whether it has acceptance criteria, for the same reason. */
   hasCriteria: boolean;
+  /** What is happening inside the prototype, from the workspace around us. */
+  eyes: Eyes;
 }) {
   const [open, setOpen] = useState(true);
   const [timeline, setTimeline] = useState<TimelineEntry[]>(initialTimeline);
@@ -238,10 +243,28 @@ export function AssistantPanel({
     ]);
 
     try {
+      /*
+       * What the assistant can see, sent with the message rather than held on
+       * the server. Only the browser knows which screen is showing -- the
+       * server never sees the framed document -- so the eyes travel with each
+       * turn. The route treats every field as untrusted, the same as the
+       * message itself.
+       */
+      const seen = eyes.context();
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prototypeId, message: text, opening }),
+        body: JSON.stringify({
+          prototypeId,
+          message: text,
+          opening,
+          screenId: seen.screen,
+          path: seen.path,
+          reference: seen.reference
+            ? { label: seen.reference.label, screenId: seen.reference.screenId }
+            : null,
+        }),
       });
 
       if (!response.ok || !response.body) {
@@ -352,11 +375,15 @@ export function AssistantPanel({
           expected: entry.item.expected,
           note: entry.item.note,
           severity: entry.item.severity,
+          // Whatever they pointed at last, if it is still waiting. The route
+          // checks it belongs to this session before attaching it.
+          annotationId: eyes.reference?.id ?? null,
         }),
       });
       if (!response.ok) return;
 
       const { item } = (await response.json()) as { item: FeedbackItem };
+      if (item.annotation) eyes.useReference();
       setTimeline((prev) =>
         prev.map((e) =>
           e.kind === "draft" && e.id === draftId
@@ -392,11 +419,16 @@ export function AssistantPanel({
       const response = await fetch("/api/feedback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prototypeId, ...draftItem }),
+        body: JSON.stringify({
+          prototypeId,
+          ...draftItem,
+          annotationId: eyes.reference?.id ?? null,
+        }),
       });
       if (!response.ok) return false;
 
       const { item } = (await response.json()) as { item: FeedbackItem };
+      if (item.annotation) eyes.useReference();
       setTimeline((prev) => [...prev, { kind: "feedback", id: item.id, item }]);
       setListOpen(true);
       return true;
@@ -599,14 +631,19 @@ export function AssistantPanel({
               </div>
             ) : null}
 
+            <PendingReference eyes={eyes} />
+
             <div className="shrink-0 border-t border-outline-variant p-3">
               {logging ? (
                 <FeedbackForm
                   onSubmit={addManually}
                   onCancel={() => setLogging(false)}
+                  screenId={eyes.screen}
                 />
               ) : (
                 <div className="flex items-end gap-2">
+                  <PointAtButton eyes={eyes} />
+
                   <IconButton
                     aria-label="Log feedback without asking the assistant"
                     title="Log feedback yourself"
@@ -704,11 +741,13 @@ function EmptyState({ configured }: { configured: boolean }) {
         </p>
       </div>
 
-      {/* Said plainly, because a reviewer who assumes it can see the screen
-          will ask "what does this button do?" and get a confusing answer.
-          Chunk 6 removes this limitation. */}
+      {/* Said plainly, because "it can see which screen I am on" is not
+          something a reviewer will assume, and the whole point of pointing at
+          something is that it saves them describing it. */}
       <p className="rounded-md bg-surface-container-highest px-3 py-2 text-body-small text-on-surface-variant">
-        It cannot see your screen yet, so name the screen or button you mean.
+        It follows along as you click, so you rarely have to say which screen
+        you mean. To point at one thing in particular, press the target button
+        below and then click it — a picture of it goes with your feedback.
       </p>
     </div>
   );

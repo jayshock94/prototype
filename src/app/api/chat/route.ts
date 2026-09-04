@@ -27,7 +27,7 @@ import {
   task,
   version,
 } from "@/db/schema";
-import { buildSystemPrompt } from "@/lib/assistant-context";
+import { buildSystemPrompt, type Looking } from "@/lib/assistant-context";
 import { isAssistantOff } from "@/lib/briefing";
 import { anthropicApiKey, hasAnthropicApiKey } from "@/lib/env";
 import {
@@ -69,6 +69,16 @@ const MAX_REPLY_TOKENS = 4096;
 const MAX_MESSAGE_CHARS = 4000;
 
 /**
+ * Caps on what the browser may say about where the reviewer is.
+ *
+ * The path digest is eight steps of one short line each, so a thousand
+ * characters is several times what it ever produces. A screen name is a
+ * `data-screen` attribute, which is a word or two.
+ */
+const MAX_PATH_CHARS = 1000;
+const MAX_SCREEN_CHARS = 120;
+
+/**
  * How many times one message may go round the record-then-continue loop.
  *
  * A reviewer raising four problems in one message is normal and takes one
@@ -89,7 +99,14 @@ export async function POST(request: Request) {
     );
   }
 
-  let payload: { prototypeId?: unknown; message?: unknown; opening?: unknown };
+  let payload: {
+    prototypeId?: unknown;
+    message?: unknown;
+    opening?: unknown;
+    screenId?: unknown;
+    path?: unknown;
+    reference?: unknown;
+  };
   try {
     payload = await request.json();
   } catch {
@@ -107,6 +124,18 @@ export async function POST(request: Request) {
    * these when it loads into an empty conversation.
    */
   const opening = payload.opening === true;
+
+  /*
+   * The eyes.
+   *
+   * Only the reviewer's browser can read the framed prototype, so what the
+   * assistant knows about the screen travels up with each message rather than
+   * living on the server. That makes it user input, and it is trimmed and
+   * capped exactly like the message beside it -- it shapes nobody's prompt but
+   * this reviewer's own, but "it can only hurt themselves" is not a reason to
+   * put an unbounded string into a system prompt.
+   */
+  const looking = readLooking(payload);
 
   if (!UUID.test(prototypeId)) {
     return NextResponse.json({ error: "Bad request." }, { status: 400 });
@@ -236,6 +265,7 @@ export async function POST(request: Request) {
     reviewerRole: context.reviewerRole,
     tasks: taskRows,
     criteria: criterionRows,
+    looking,
     recorded: alreadyRecorded.map((r) => ({
       severity: r.severity,
       screenId: r.screenId,
@@ -322,7 +352,11 @@ export async function POST(request: Request) {
       // Not a database id -- there is no row yet. It exists so the panel can
       // key the card and so Save knows which draft it is saving.
       draftId: crypto.randomUUID(),
-      screenId: cleanField(raw.screen_id),
+      // Claude names the screen when the conversation was about a different
+      // one; otherwise the screen actually showing is the better answer, and
+      // it is a fact rather than a guess. A reference attached at save time
+      // overrides both, because that one was measured.
+      screenId: cleanField(raw.screen_id) ?? looking.screen,
       happened,
       expected,
       note,
@@ -504,6 +538,45 @@ export async function POST(request: Request) {
       "X-Accel-Buffering": "no",
     },
   });
+}
+
+/**
+ * Read what the browser says the reviewer is looking at.
+ *
+ * Everything is optional. A prototype that marks no screens sends no screen; a
+ * reviewer who has clicked nothing sends no path; the first message of a
+ * session sends neither. The caps are generous enough that nothing real is ever
+ * cut and small enough that this cannot become the bulk of the prompt.
+ */
+function readLooking(payload: {
+  screenId?: unknown;
+  path?: unknown;
+  reference?: unknown;
+}): Looking {
+  const reference = payload.reference as
+    | { label?: unknown; screenId?: unknown }
+    | null
+    | undefined;
+
+  return {
+    screen: cleanScreen(payload.screenId),
+    path: typeof payload.path === "string" ? payload.path.trim().slice(0, MAX_PATH_CHARS) : "",
+    reference:
+      reference && typeof reference === "object"
+        ? {
+            label:
+              typeof reference.label === "string"
+                ? reference.label.trim().slice(0, MAX_SCREEN_CHARS) || null
+                : null,
+            screenId: cleanScreen(reference.screenId),
+          }
+        : null,
+  };
+}
+
+function cleanScreen(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  return value.trim().slice(0, MAX_SCREEN_CHARS) || null;
 }
 
 /** Streaming a reply can outlast the default function timeout on a long answer. */

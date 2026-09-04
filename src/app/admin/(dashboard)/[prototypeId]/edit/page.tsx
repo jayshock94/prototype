@@ -1,10 +1,20 @@
 import type { Metadata } from "next";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, count, eq, sql } from "drizzle-orm";
 import { notFound } from "next/navigation";
 
 import { getDb } from "@/db";
-import { criterion, notBuilt, prototype, task, version } from "@/db/schema";
+import {
+  annotation,
+  criterion,
+  feedback,
+  notBuilt,
+  prototype,
+  session,
+  task,
+  version,
+} from "@/db/schema";
 import { MAX_KNOWLEDGE_BASE_BYTES } from "@/lib/prototype-storage";
+import { DeletePrototype } from "./delete-prototype";
 import { EditPrototypeForm } from "./edit-prototype-form";
 
 export const metadata: Metadata = { title: "Edit prototype · Admin" };
@@ -83,11 +93,43 @@ export default async function EditPrototypePage({
       ])
     : [[], [], []];
 
+  /*
+   * What deleting this would destroy.
+   *
+   * Four separate counts rather than one clever query: they count rows in four
+   * tables joined in three different shapes, and a single query that produced
+   * all four would need enough DISTINCTs to be worth nobody's time to read.
+   * This page is already doing half a dozen queries and is not on a hot path.
+   */
+  const [[versionTally], [reviewTally], [findingTally], [shotTally]] =
+    await Promise.all([
+      db
+        .select({ n: count() })
+        .from(version)
+        .where(eq(version.prototypeId, prototypeId)),
+      db
+        .select({ n: count() })
+        .from(session)
+        .innerJoin(version, eq(version.id, session.versionId))
+        .where(eq(version.prototypeId, prototypeId)),
+      db
+        .select({ n: count() })
+        .from(feedback)
+        .innerJoin(session, eq(session.id, feedback.sessionId))
+        .innerJoin(version, eq(version.id, session.versionId))
+        .where(eq(version.prototypeId, prototypeId)),
+      db
+        .select({ n: count(sql`case when ${annotation.screenshotBlobUrl} is not null then 1 end`) })
+        .from(annotation)
+        .innerJoin(session, eq(session.id, annotation.sessionId))
+        .innerJoin(version, eq(version.id, session.versionId))
+        .where(eq(version.prototypeId, prototypeId)),
+    ]);
+
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-8">
       <div>
-        <p className="text-label-medium text-on-surface-variant">{row.name}</p>
-        <h1 className="text-headline-medium text-on-surface">Edit prototype</h1>
+        <h2 className="text-title-large text-on-surface">Settings</h2>
         <p className="mt-1 text-body-medium text-on-surface-variant">
           Changes are live for reviewers as soon as you save. The reviewer link
           does not change.
@@ -124,6 +166,17 @@ export default async function EditPrototypePage({
           knowledgeBaseText: current?.knowledgeBaseText ?? "",
           scenario: current?.scenario ?? "",
           notBuilt: notBuiltRows.map((n) => n.text).join("\n"),
+        }}
+      />
+
+      <DeletePrototype
+        prototypeId={prototypeId}
+        name={row.name}
+        tally={{
+          versions: versionTally.n,
+          reviews: reviewTally.n,
+          findings: findingTally.n,
+          screenshots: shotTally.n,
         }}
       />
     </div>

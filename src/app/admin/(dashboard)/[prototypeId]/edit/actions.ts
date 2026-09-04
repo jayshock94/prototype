@@ -25,7 +25,15 @@ import { revalidatePath } from "next/cache";
 import { and, eq, notInArray } from "drizzle-orm";
 
 import { getDb } from "@/db";
-import { criterion, notBuilt, prototype, task, version } from "@/db/schema";
+import {
+  annotation,
+  criterion,
+  notBuilt,
+  prototype,
+  session,
+  task,
+  version,
+} from "@/db/schema";
 import {
   isAssistantMode,
   type AssistantMode,
@@ -38,6 +46,7 @@ import {
 import { hashPassword } from "@/lib/password";
 import {
   MAX_KNOWLEDGE_BASE_BYTES,
+  deleteBlobs,
   formatBytes,
 } from "@/lib/prototype-storage";
 import { parseReviewerNames } from "@/lib/reviewer-names";
@@ -350,3 +359,89 @@ async function writeCriteria(tx: Tx, versionId: string, drafts: CriterionDraft[]
  * index on version means the old row has to be cleared in the same
  * transaction.
  */
+
+/* --------------------------------------------------------------------------
+ * Deleting a prototype
+ * ------------------------------------------------------------------------ */
+
+export type DeletePrototypeState = { error?: string };
+
+/**
+ * Delete a prototype and everything hanging off it.
+ *
+ * This is the only genuinely irreversible thing in the admin area. Every
+ * version, every review session, every conversation, every finding and every
+ * screenshot goes, and there is no bin to fish them back out of. Three things
+ * follow from that:
+ *
+ *  - **The name has to be typed.** The confirmation field is not decoration
+ *    and it is checked here, not only in the browser: a disabled button is a
+ *    courtesy, not a control, and this action can be called without one.
+ *  - **The rows go first, the files second.** Postgres cascades handle every
+ *    table; Blob storage has no idea any of this happened, so the URLs are
+ *    read out *before* the delete and the files are removed afterwards. Doing
+ *    it the other way round would mean a failure between the two left rows
+ *    pointing at files that no longer exist -- a prototype that looks fine in
+ *    the list and 404s when you open it.
+ *  - **A failed cleanup is not reported.** By then the prototype is gone, and
+ *    telling somebody that a deletion they cannot undo half-failed is both
+ *    alarming and, for them, unactionable.
+ *
+ * Like updatePrototype, the id is bound to the action rather than posted, so
+ * the browser cannot repoint a delete at a different prototype. The admin
+ * session is checked by middleware, which covers /admin/:path* -- and a server
+ * action posts to the page's own URL, so it is covered too.
+ */
+export async function deletePrototype(
+  prototypeId: string,
+  _previousState: DeletePrototypeState,
+  formData: FormData,
+): Promise<DeletePrototypeState> {
+  if (!UUID_PATTERN.test(prototypeId)) {
+    return { error: "That prototype does not exist." };
+  }
+
+  const db = getDb();
+
+  const [row] = await db
+    .select({ id: prototype.id, name: prototype.name })
+    .from(prototype)
+    .where(eq(prototype.id, prototypeId))
+    .limit(1);
+
+  if (!row) {
+    // Already gone. Nothing to do and nothing to complain about.
+    redirect("/admin");
+  }
+
+  const typed = String(formData.get("confirmName") ?? "").trim();
+  if (typed !== row.name.trim()) {
+    return {
+      error: `Type the prototype's name exactly — "${row.name}" — to delete it.`,
+    };
+  }
+
+  // Every file this prototype owns, collected while the rows still exist.
+  const [versionRows, annotationRows] = await Promise.all([
+    db
+      .select({ htmlBlobUrl: version.htmlBlobUrl })
+      .from(version)
+      .where(eq(version.prototypeId, prototypeId)),
+    db
+      .select({ screenshotBlobUrl: annotation.screenshotBlobUrl })
+      .from(annotation)
+      .innerJoin(session, eq(session.id, annotation.sessionId))
+      .innerJoin(version, eq(version.id, session.versionId))
+      .where(eq(version.prototypeId, prototypeId)),
+  ]);
+
+  await db.delete(prototype).where(eq(prototype.id, prototypeId));
+
+  await deleteBlobs([
+    ...versionRows.map((v) => v.htmlBlobUrl),
+    ...annotationRows.map((a) => a.screenshotBlobUrl),
+  ]);
+
+  revalidatePath("/admin");
+  redirect("/admin");
+}

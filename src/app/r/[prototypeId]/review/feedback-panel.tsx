@@ -26,7 +26,9 @@ import { SeverityBadge } from "@/components/m3/severity-badge";
 import { DeleteIcon } from "@/components/m3/icons";
 import { summarise, type FeedbackItem } from "@/lib/feedback";
 import { FeedbackForm } from "./feedback-form";
+import { PendingReference, PointAtButton, Thumbnail } from "./pointing";
 import { ReviewSummary } from "./review-summary";
+import type { Eyes } from "./review-workspace";
 
 export interface BriefTask {
   goal: string;
@@ -47,6 +49,7 @@ export function FeedbackPanel({
   notBuilt,
   initialItems,
   initiallyCompleted,
+  eyes,
 }: {
   prototypeId: string;
   scenario: string | null;
@@ -55,6 +58,8 @@ export function FeedbackPanel({
   notBuilt: string[];
   initialItems: FeedbackItem[];
   initiallyCompleted: boolean;
+  /** What is happening inside the prototype, from the workspace around us. */
+  eyes: Eyes;
 }) {
   const [items, setItems] = useState(initialItems);
   const [adding, setAdding] = useState(false);
@@ -65,12 +70,19 @@ export function FeedbackPanel({
     const response = await fetch("/api/feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prototypeId, ...draft }),
+      body: JSON.stringify({
+        prototypeId,
+        ...draft,
+        // Whatever they pointed at last, if it is still waiting. The route
+        // checks it belongs to this session before attaching it.
+        annotationId: eyes.reference?.id ?? null,
+      }),
     }).catch(() => null);
 
     if (!response?.ok) return false;
 
     const { item } = (await response.json()) as { item: FeedbackItem };
+    if (item.annotation) eyes.useReference();
     setItems((prev) => [...prev, item]);
     setAdding(false);
     return true;
@@ -154,6 +166,12 @@ export function FeedbackPanel({
                         className="flex items-start gap-2 rounded-sm bg-surface-container px-3 py-2"
                       >
                         <SeverityBadge severity={item.severity} />
+                        {item.annotation ? (
+                          <Thumbnail
+                            reference={item.annotation}
+                            className="size-10 shrink-0 object-cover"
+                          />
+                        ) : null}
                         <p className="min-w-0 flex-1 text-body-medium text-on-surface">
                           {summarise(item)}
                         </p>
@@ -171,9 +189,13 @@ export function FeedbackPanel({
                 ) : null}
 
                 {adding ? (
-                  <FeedbackForm onSubmit={add} onCancel={() => setAdding(false)} />
+                  <FeedbackForm
+                    onSubmit={add}
+                    onCancel={() => setAdding(false)}
+                    screenId={eyes.screen}
+                  />
                 ) : (
-                  <div>
+                  <div className="flex items-center gap-2">
                     <Button
                       variant="tonal"
                       onClick={() => setAdding(true)}
@@ -181,11 +203,14 @@ export function FeedbackPanel({
                     >
                       Add feedback
                     </Button>
+                    <PointAtButton eyes={eyes} />
                   </div>
                 )}
               </section>
             </div>
           </div>
+
+          <PendingReference eyes={eyes} />
 
           <div className="flex items-center justify-end border-t border-outline-variant px-3 py-2">
             <Button variant="text" onClick={() => void setFinished(true)}>

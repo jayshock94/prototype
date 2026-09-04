@@ -5,6 +5,7 @@ import { notFound, redirect } from "next/navigation";
 
 import { getDb } from "@/db";
 import {
+  annotation,
   criterion,
   feedback,
   message,
@@ -14,6 +15,7 @@ import {
   task,
   version,
 } from "@/db/schema";
+import { annotationImageUrl, type AnnotationRef } from "@/lib/annotation";
 import {
   hasValidPass,
   passCookieName,
@@ -22,8 +24,8 @@ import {
 } from "@/lib/reviewer-auth";
 import { isAssistantOff } from "@/lib/briefing";
 import { hasAnthropicApiKey } from "@/lib/env";
-import { AssistantPanel, type TimelineEntry } from "./assistant-panel";
-import { FeedbackPanel } from "./feedback-panel";
+import type { TimelineEntry } from "./assistant-panel";
+import { ReviewWorkspace } from "./review-workspace";
 
 export const metadata: Metadata = {
   title: "Review",
@@ -148,6 +150,15 @@ export default async function ReviewPage({
     .where(eq(message.sessionId, sessionId))
     .orderBy(asc(message.createdAt));
 
+  /*
+   * The saved feedback, with whatever each item points at.
+   *
+   * A left join rather than a second query, because most items have no
+   * annotation and the ones that do have exactly one. The image URL is built
+   * here rather than stored: the column holds a private Blob URL that no
+   * browser can load, and /api/annotation/[id]/image is the route that decides
+   * who may see it.
+   */
   const logged = await db
     .select({
       id: feedback.id,
@@ -157,10 +168,34 @@ export default async function ReviewPage({
       note: feedback.note,
       severity: feedback.severity,
       createdAt: feedback.createdAt,
+      annotationId: annotation.id,
+      annotationScreenId: annotation.screenId,
+      annotationLabel: annotation.label,
+      annotationBlobUrl: annotation.screenshotBlobUrl,
     })
     .from(feedback)
+    .leftJoin(annotation, eq(annotation.id, feedback.annotationId))
     .where(eq(feedback.sessionId, sessionId))
     .orderBy(asc(feedback.createdAt));
+
+  const items = logged.map((row) => ({
+    id: row.id,
+    screenId: row.screenId,
+    expected: row.expected,
+    happened: row.happened,
+    note: row.note,
+    severity: row.severity,
+    annotation: row.annotationId
+      ? ({
+          id: row.annotationId,
+          screenId: row.annotationScreenId,
+          label: row.annotationLabel,
+          imageUrl: row.annotationBlobUrl
+            ? annotationImageUrl(row.annotationId)
+            : null,
+        } satisfies AnnotationRef)
+      : null,
+  }));
 
   /*
    * Messages and feedback are stored in two tables but happened in one order,
@@ -182,17 +217,10 @@ export default async function ReviewPage({
       content: row.content,
       at: row.createdAt.getTime(),
     })),
-    ...logged.map((row) => ({
+    ...logged.map((row, index) => ({
       kind: "feedback" as const,
       id: row.id,
-      item: {
-        id: row.id,
-        screenId: row.screenId,
-        expected: row.expected,
-        happened: row.happened,
-        note: row.note,
-        severity: row.severity,
-      },
+      item: items[index],
       at: row.createdAt.getTime(),
     })),
   ]
@@ -230,44 +258,26 @@ export default async function ReviewPage({
         Side by side on desktop, stacked on anything narrower. The prototype
         keeps a workable height on mobile rather than being squeezed by the
         panel below it.
-      */}
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <div className="min-h-0 flex-1 max-lg:h-[65dvh]">
-          <iframe
-            src={`/p/${row.versionId}`}
-            title={`${row.name} ${row.label}`}
-            className="h-full w-full border-0 bg-white"
-          />
-        </div>
 
-        {assistantOff ? (
-          <FeedbackPanel
-            prototypeId={prototypeId}
-            scenario={row.scenario}
-            tasks={briefTasks}
-            criteria={briefCriteria}
-            notBuilt={briefNotBuilt.map((n) => n.text)}
-            initialItems={logged.map((item) => ({
-              id: item.id,
-              screenId: item.screenId,
-              expected: item.expected,
-              happened: item.happened,
-              note: item.note,
-              severity: item.severity,
-            }))}
-            initiallyCompleted={visit.completedAt !== null}
-          />
-        ) : (
-          <AssistantPanel
-            prototypeId={prototypeId}
-            initialTimeline={timeline}
-            initiallyCompleted={visit.completedAt !== null}
-            configured={hasAnthropicApiKey()}
-            hasTasks={briefTasks.length > 0}
-            hasCriteria={briefCriteria.length > 0}
-          />
-        )}
-      </div>
+        The frame and the panel are one client component rather than two
+        siblings, because the panel needs to know what is happening inside the
+        frame -- which screen is showing, what was clicked, what the reviewer
+        pointed at.
+      */}
+      <ReviewWorkspace
+        prototypeId={prototypeId}
+        versionId={row.versionId}
+        frameTitle={`${row.name} ${row.label}`}
+        assistantOff={assistantOff}
+        scenario={row.scenario}
+        tasks={briefTasks}
+        criteria={briefCriteria}
+        notBuilt={briefNotBuilt.map((n) => n.text)}
+        items={items}
+        timeline={timeline}
+        completed={visit.completedAt !== null}
+        configured={hasAnthropicApiKey()}
+      />
     </div>
   );
 }

@@ -3,11 +3,13 @@ import Link from "next/link";
 import { desc, eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 
+import { ButtonLink } from "@/components/m3/button";
 import { Card } from "@/components/m3/card";
-import { ArrowBackIcon } from "@/components/m3/icons";
+import { DownloadIcon } from "@/components/m3/icons";
 import { SeverityBadge } from "@/components/m3/severity-badge";
 import { getDb } from "@/db";
-import { feedback, prototype, session, version } from "@/db/schema";
+import { annotation, feedback, prototype, session, version } from "@/db/schema";
+import { annotationImageUrl } from "@/lib/annotation";
 import {
   SEVERITIES,
   SEVERITY_LABELS,
@@ -77,10 +79,14 @@ export default async function FeedbackPage({
       versionId: version.id,
       versionLabel: version.label,
       versionCreatedAt: version.createdAt,
+      annotationId: annotation.id,
+      annotationLabel: annotation.label,
+      annotationBlobUrl: annotation.screenshotBlobUrl,
     })
     .from(feedback)
     .innerJoin(session, eq(session.id, feedback.sessionId))
     .innerJoin(version, eq(version.id, session.versionId))
+    .leftJoin(annotation, eq(annotation.id, feedback.annotationId))
     .where(eq(version.prototypeId, prototypeId))
     .orderBy(desc(version.createdAt), desc(feedback.createdAt));
 
@@ -132,20 +138,25 @@ export default async function FeedbackPage({
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <Link
-          href={`/admin/${prototypeId}`}
-          className="m3-state-layer -ml-2 inline-flex items-center gap-1 rounded-sm px-2 py-1 text-label-large text-on-surface-variant"
-        >
-          <ArrowBackIcon className="size-[18px]" />
-          {row.name}
-        </Link>
-        <h1 className="mt-1 text-headline-medium text-on-surface">Feedback</h1>
-        <p className="mt-1 text-body-medium text-on-surface-variant">
-          {rows.length === 0
-            ? "Nothing yet. It will appear here as reviewers work through the prototype."
-            : `${rows.length} ${rows.length === 1 ? "item" : "items"} from ${reviewers.length} ${reviewers.length === 1 ? "reviewer" : "reviewers"}.`}
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="text-title-large text-on-surface">Every finding</h2>
+          <p className="mt-1 text-body-medium text-on-surface-variant">
+            {rows.length === 0
+              ? "Nothing yet. It will appear here as reviewers work through the prototype."
+              : `${rows.length} ${rows.length === 1 ? "item" : "items"} from ${reviewers.length} ${reviewers.length === 1 ? "reviewer" : "reviewers"}.`}
+          </p>
+        </div>
+
+        {rows.length > 0 ? (
+          <ButtonLink
+            href={`/api/admin/export?prototypeId=${prototypeId}`}
+            variant="outlined"
+            icon={<DownloadIcon className="size-[18px]" />}
+          >
+            Download everything
+          </ButtonLink>
+        ) : null}
       </div>
 
       {rows.length > 0 ? (
@@ -229,6 +240,29 @@ export default async function FeedbackPage({
                       />
                     </span>
                   </div>
+
+                  {/*
+                    What they pointed at, when they pointed at something.
+                    Full width and above the words: the whole reason a reviewer
+                    takes the trouble to point at something is so this page does
+                    not need the sentence "the button below the total, on the
+                    right" parsed back into a location.
+                  */}
+                  {item.annotationId && item.annotationBlobUrl ? (
+                    <figure className="mt-3">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={annotationImageUrl(item.annotationId)}
+                        alt={item.annotationLabel ?? "What the reviewer pointed at"}
+                        className="max-h-64 w-auto max-w-full rounded-sm border border-outline-variant bg-surface"
+                      />
+                      {item.annotationLabel ? (
+                        <figcaption className="mt-1 text-body-small text-on-surface-variant">
+                          {item.annotationLabel}
+                        </figcaption>
+                      ) : null}
+                    </figure>
+                  ) : null}
 
                   <dl className="mt-3 grid gap-x-6 gap-y-2 text-body-medium sm:grid-cols-2">
                     {item.happened ? (
